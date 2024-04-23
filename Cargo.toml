@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 rocket = { version = "0.5.0", features = ["json"] }
-serde = "1.0.197"
+serde = "1.0.198"
 tokio = { version = "1.37.0", features = ["macros", "rt"] }
 url = { version = "2.5.0", features = ["serde"] }
 url-cleaner = { path = "../url-cleaner" }
