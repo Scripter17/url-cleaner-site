@@ -10,11 +10,23 @@ use std::net::{IpAddr, Ipv4Addr};
 #[launch]
 fn rocket() -> _ {
     rocket::custom(rocket::Config {
-        port: 9149,
+        port: 9149, // Vanity :3
         address: IpAddr::V4(Ipv4Addr::new(0,0,0,0)),
         ..rocket::Config::default()
-    }).mount("/clean", routes![clean])
+    })
+        .mount("/", routes![index])
+        .mount("/clean", routes![clean])
         .attach(Anarcors)
+}
+
+#[get("/")]
+fn index() -> &'static str {
+    r#"Both URL Cleaner Site and URL Cleaner are licensed under the Affero General Public License V3 or later.
+The original source code of URL Cleaner: https://github.com/Scripter17/url-cleaner
+The original source code of URL Cleaner Site: https://github.com/Scripter17/url-cleaner-site
+
+The modified source code of URL Cleaner (if applicable): 
+The modified source code of URL Cleaner Site (if applicable): "#
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

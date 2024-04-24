@@ -12,7 +12,7 @@
 
 async function doit() {
 	let elements = [...document.getElementsByTagName("a")]
-		.filter(e => e.href.startsWith("http") && e.getAttribute("url-cleaned") == null);
+		.filter(e => e.getAttribute("url-cleaned") == null);
 	if (elements.length > 0) {
 		await GM_xmlhttpRequest({
 			url: "http://localhost:9149/clean",
@@ -20,11 +20,12 @@ async function doit() {
 			data: JSON.stringify({urls: elements.map(x => x.href)}),
 			onload: function(response) {
 				JSON.parse(response.responseText).urls.forEach(function (cleaning_result, index) {
+					// Any language without proper enums has terrible ergonomics.
 					if (cleaning_result.Err == null) {
 						if (elements[index].href != cleaning_result.Ok) {elements[index].href = cleaning_result.Ok;}
 						elements[index].setAttribute("url-cleaned", "true");
 					} else {
-						console.log("URL Cleaner error": cleaning_result, index, cleaning_result);
+						console.error("URL Cleaner error:", cleaning_result, index, elements[index]);
 						elements[index].setAttribute("url-cleaned", "error");
 						elements[index].setAttribute("url-cleaner-error", cleaning_result.Err);
 						elements[index].style.color = "red";

@@ -2,6 +2,11 @@
 name = "url-cleaner-site"
 version = "0.1.0"
 edition = "2021"
+description = "A basic HTTP server and userscript to make using URL Cleaner in a browser easier."
+repository = "https://github.com/Scripter17/url-cleaner-site"
+keywords = ["url", "tracking", "paramaters", "telemetry", "consent"] # "telemetry" is specified because the freaks that use telemetry need to know people don't want or consent to it.
+categories = []
+license = "AGPL-3.0-or-later"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
