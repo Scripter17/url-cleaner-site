@@ -3,6 +3,7 @@ use rocket::serde::json::Json;
 use rocket::http::Header;
 use rocket::{Request, Response};
 use rocket::fairing::{Fairing, Info, Kind};
+use rocket::data::{Limits, ToByteUnit};
 use url::Url;
 use serde::{Serialize, Deserialize};
 use std::net::{IpAddr, Ipv4Addr};
@@ -12,6 +13,7 @@ fn rocket() -> _ {
     rocket::custom(rocket::Config {
         port: 9149, // Vanity :3
         address: IpAddr::V4(Ipv4Addr::new(0,0,0,0)),
+        limits: Limits::default().limit("/clean", 10.mebibytes()),
         ..rocket::Config::default()
     })
         .mount("/", routes![index])
