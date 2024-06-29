@@ -18,8 +18,15 @@ and returns a response of the following form
 ```Rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct JobResponse {
-    urls: Vec<Result<Url, String>>
+    urls: Vec<Result<Url, JobError>>
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct JobError {
+    r#type: String,
+    source_url: String,
+    error: String
 }
 ```
 
-The semantics of which I think are pretty clear.
+It is intended to be byte-for-byte identical to the equivalent invocation of URL Cleaner in JSON mode.

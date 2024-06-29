@@ -67,7 +67,14 @@ struct Job {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct JobResponse {
-    urls: Vec<Result<Url, String>>
+    urls: Vec<Result<Url, JobError>>
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct JobError {
+    r#type: String,
+    source_url: String,
+    error: String
 }
 
 #[post("/", data="<job>")]
@@ -82,7 +89,7 @@ fn clean(job: Json<Job>) -> Json<JobResponse> {
     };
     Json(JobResponse {
         urls: job.urls.into_iter()
-            .map(|mut url| {config.apply(&mut url).map_err(|e| e.to_string())?; Ok(url)}).collect()
+            .map(|mut url| {config.apply(&mut url).map_err(|e| JobError { r#type: "RuleError".to_string(), source_url: url.as_str().to_string(), error: e.to_string() })?; Ok(url)}).collect()
     })
 }
 
