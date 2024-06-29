@@ -42,7 +42,10 @@ fn rocket() -> _ {
 
 #[get("/")]
 fn index() -> &'static str {
-    r#"Both URL Cleaner Site and URL Cleaner are licensed under the Affero General Public License V3 or later.
+    r#"Both URL Cleaner Site and URL Cleaner are licensed under the Affero General Public License V3 or later (SPDX: AGPL-3.0-or-later).
+https://en.wikipedia.org/wiki/GNU_Affero_General_Public_License
+https://www.gnu.org/licenses/agpl-3.0.html
+
 The original source code of URL Cleaner: https://github.com/Scripter17/url-cleaner
 The original source code of URL Cleaner Site: https://github.com/Scripter17/url-cleaner-site
 
