@@ -1,2 +1,4 @@
 /target
 *cache*
+hyperfine*
+sync.sh

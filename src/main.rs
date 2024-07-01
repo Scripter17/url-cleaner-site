@@ -3,7 +3,7 @@ use rocket::serde::json::Json;
 use rocket::http::Header;
 use rocket::{Request, Response};
 use rocket::fairing::{Fairing, Info, Kind};
-use rocket::data::{Limits, ToByteUnit};
+use rocket::data::Limits;
 use url::Url;
 use serde::{Serialize, Deserialize};
 use std::net::{IpAddr, Ipv4Addr};
@@ -12,10 +12,19 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::fs::read_to_string;
 use std::borrow::Cow;
+use std::str::FromStr;
 
-#[derive(Parser)]
+/// Clap doesn't like `<rocket::data::ByteUnit as FromStr>::Error`.
+fn parse_byte_unit(s: &str) -> Result<rocket::data::ByteUnit, String> {
+    rocket::data::ByteUnit::from_str(s).map_err(|x| x.to_string())
+}
+
+#[derive(Debug, Parser)]
 struct Args {
-    #[arg(long, short)] config: Option<PathBuf>
+    #[arg(long, short)] config: Option<PathBuf>,
+    #[arg(long       , default_value = "10MiB", value_parser = parse_byte_unit)] max_size: rocket::data::ByteUnit,
+    #[arg(long       , default_value = "0.0.0.0")] ip: IpAddr,
+    #[arg(long       , default_value = "9149"   )] port: u16
 }
 
 static CONFIG_STR: OnceLock<String> = OnceLock::new();
@@ -29,9 +38,9 @@ fn rocket() -> _ {
     CONFIG.set(serde_json::from_str(CONFIG_STR.get().unwrap()).unwrap()).unwrap();
 
     rocket::custom(rocket::Config {
-        port: 9149, // Vanity :3
-        address: IpAddr::V4(Ipv4Addr::new(0,0,0,0)),
-        limits: Limits::default().limit("/clean", 10.mebibytes()),
+        port: args.port,
+        address: args.ip,
+        limits: Limits::default().limit("json", args.max_size),
         ..rocket::Config::default()
     })
         .mount("/", routes![index])
