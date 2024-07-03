@@ -14,7 +14,7 @@ json=false
 no_hyperfine=false
 print_desmos_lists=false
 
-COMMAND="curl --json @- http://localhost:9149/clean"
+COMMAND="curl --json @- http://localhost:9149/clean -f"
 
 for arg in "$@"; do
   shift
@@ -44,6 +44,13 @@ for url in "${URLS[@]}"; do
       --input stdin\
       "$COMMAND"\
       --export-json "hyperfine-$file_safe_in_url.json"
+    echo $?
+    if [ $? -ne 0 ]; then
+      echo Hyperfine failed
+      echo If it says the command exited with exit code 7, you probably aren\'t running URL Cleaner Site.
+      echo If it says the command exited with exit code 22, you probably need to raise URL Cleaner Site\'s size limit.
+      echo The size of the STDIN it failed with is $(cat stdin | wc -c) bytes.
+    fi
     rm stdin
     if [ "$print_desmos_lists" == "true" ]; then
       echo "N=[$NUMS]"

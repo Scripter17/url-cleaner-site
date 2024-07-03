@@ -25,13 +25,14 @@ struct Args {
     #[arg(long, short)] config: Option<PathBuf>,
     /// A url_cleaner::types::ParamsDiff JSON file to apply to the config by default.
     #[arg(long       )] params_diff: Option<PathBuf>,
-    #[arg(long       , default_value = "10MiB", value_parser = parse_byte_unit)] max_size: rocket::data::ByteUnit,
+    #[arg(long       , default_value = "25MiB", value_parser = parse_byte_unit)] max_size: rocket::data::ByteUnit,
     #[arg(long       , default_value = "0.0.0.0")] ip: IpAddr,
     #[arg(long       , default_value = "9149"   )] port: u16
 }
 
 static CONFIG_STR: OnceLock<String> = OnceLock::new();
 static CONFIG: OnceLock<url_cleaner::types::Config> = OnceLock::new();
+static MAX_JSON_SIZE: OnceLock<rocket::data::ByteUnit> = OnceLock::new();
 
 #[launch]
 fn rocket() -> _ {
@@ -44,6 +45,7 @@ fn rocket() -> _ {
         params_diff.apply(&mut config.params);
     }
     CONFIG.set(config).unwrap();
+    MAX_JSON_SIZE.set(args.max_size).unwrap();
 
     rocket::custom(rocket::Config {
         address: args.ip,
@@ -53,6 +55,7 @@ fn rocket() -> _ {
     })
         .mount("/", routes![index])
         .mount("/clean", routes![clean])
+        .mount("/get-max-json-size", routes![get_max_json_size])
         .mount("/get-config", routes![get_config])
         .attach(Anarcors)
 }
@@ -116,6 +119,11 @@ fn clean(job: Json<Job>) -> Json<JobResponse> {
             })
             .collect()
     })
+}
+
+#[get("/")]
+fn get_max_json_size() -> String {
+    MAX_JSON_SIZE.get().unwrap().as_u64().to_string()
 }
 
 struct Anarcors;
