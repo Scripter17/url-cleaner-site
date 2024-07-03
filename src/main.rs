@@ -6,7 +6,7 @@ use rocket::fairing::{Fairing, Info, Kind};
 use rocket::data::Limits;
 use url::Url;
 use serde::{Serialize, Deserialize};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -21,7 +21,10 @@ fn parse_byte_unit(s: &str) -> Result<rocket::data::ByteUnit, String> {
 
 #[derive(Debug, Parser)]
 struct Args {
+    /// A url_cleaner::types::Config JSON file. If none is provided, uses URL Cleaner's default config.
     #[arg(long, short)] config: Option<PathBuf>,
+    /// A url_cleaner::types::ParamsDiff JSON file to apply to the config by default.
+    #[arg(long       )] params_diff: Option<PathBuf>,
     #[arg(long       , default_value = "10MiB", value_parser = parse_byte_unit)] max_size: rocket::data::ByteUnit,
     #[arg(long       , default_value = "0.0.0.0")] ip: IpAddr,
     #[arg(long       , default_value = "9149"   )] port: u16
@@ -35,11 +38,16 @@ fn rocket() -> _ {
     let args = Args::parse();
 
     CONFIG_STR.set(args.config.as_deref().map(|path| read_to_string(path).unwrap()).unwrap_or(url_cleaner::types::DEFAULT_CONFIG_STR.to_string())).unwrap();
-    CONFIG.set(serde_json::from_str(CONFIG_STR.get().unwrap()).unwrap()).unwrap();
+    let mut config: url_cleaner::types::Config = serde_json::from_str(CONFIG_STR.get().unwrap()).unwrap();
+    if let Some(params_diff) = args.params_diff {
+        let params_diff: url_cleaner::types::ParamsDiff = serde_json::from_str(&read_to_string(params_diff).unwrap()).unwrap();
+        params_diff.apply(&mut config.params);
+    }
+    CONFIG.set(config).unwrap();
 
     rocket::custom(rocket::Config {
-        port: args.port,
         address: args.ip,
+        port: args.port,
         limits: Limits::default().limit("json", args.max_size),
         ..rocket::Config::default()
     })
@@ -69,7 +77,7 @@ fn get_config() -> &'static str {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Job {
-    urls: Vec<Url>,
+    urls: Vec<String>,
     #[serde(default)]
     params_diff: Option<url_cleaner::types::ParamsDiff>
 }
@@ -82,7 +90,7 @@ struct JobResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct JobError {
     r#type: String,
-    source_url: String,
+    source: String,
     error: String
 }
 
@@ -97,8 +105,16 @@ fn clean(job: Json<Job>) -> Json<JobResponse> {
         Cow::Borrowed(CONFIG.get().unwrap())
     };
     Json(JobResponse {
-        urls: job.urls.into_iter()
-            .map(|mut url| {config.apply(&mut url).map_err(|e| JobError { r#type: "RuleError".to_string(), source_url: url.as_str().to_string(), error: e.to_string() })?; Ok(url)}).collect()
+        urls: job.urls
+            .into_iter()
+            .map(|url| {
+                let mut url = Url::parse(&url)
+                    .map_err(|e| JobError { r#type: "ParseError".to_string(), source: url            , error: e.to_string() })?;
+                config.apply(&mut url)
+                    .map_err(|e| JobError { r#type: "RuleError" .to_string(), source: url.to_string(), error: e.to_string() })?;
+                Ok(url)
+            })
+            .collect()
     })
 }
 
