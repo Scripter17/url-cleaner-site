@@ -4,15 +4,20 @@ use rocket::http::Header;
 use rocket::{Request, Response};
 use rocket::fairing::{Fairing, Info, Kind};
 use rocket::data::Limits;
-use url::Url;
-use serde::{Serialize, Deserialize};
+
 use std::net::IpAddr;
-use clap::Parser;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::fs::read_to_string;
-use std::borrow::Cow;
 use std::str::FromStr;
+
+use clap::Parser;
+use url::Url;
+use serde::{Serialize, Deserialize};
+
+const DEFAULT_MAX_JSON_SIZE: &str = "25MiB";
+const DEFAULT_BIND_IP: &str = "127.0.0.1";
+const DEFAULT_PORT: u16 = 9149;
 
 /// Clap doesn't like `<rocket::data::ByteUnit as FromStr>::Error`.
 fn parse_byte_unit(s: &str) -> Result<rocket::data::ByteUnit, String> {
@@ -24,15 +29,27 @@ struct Args {
     /// A url_cleaner::types::Config JSON file. If none is provided, uses URL Cleaner's default config.
     #[arg(long, short)] config: Option<PathBuf>,
     /// A url_cleaner::types::ParamsDiff JSON file to apply to the config by default.
-    #[arg(long       )] params_diff: Option<PathBuf>,
-    #[arg(long       , default_value = "25MiB", value_parser = parse_byte_unit)] max_size: rocket::data::ByteUnit,
-    #[arg(long       , default_value = "0.0.0.0")] ip: IpAddr,
-    #[arg(long       , default_value = "9149"   )] port: u16
+    #[arg(long)] params_diff: Option<PathBuf>,
+    /// The max size of a POST request to the `/clean` endpoint.
+    /// 
+    /// The included userscript uses the `/get-max-json-size` endpoint to query this value and adjust its batch sizes accordingly.
+    #[arg(long, default_value = DEFAULT_MAX_JSON_SIZE, value_parser = parse_byte_unit)] max_size: rocket::data::ByteUnit,
+    /// 127.0.0.1 should be used when only using the userscript.
+    /// 
+    /// 0.0.0.0 is the simplest way to allow other computers to use this instance of URL Cleaner Site.
+    /// 
+    /// Please note that while URL Cleaner Site is written in Rust, the default config makes HTTP requests and could therefore be used as a denial of service vector.
+    /// 
+    /// 0.0.0.0 should only be used on networks you trust and/or behind a firewall.
+    #[arg(long, default_value = DEFAULT_BIND_IP, aliases = ["ip", "address"])] bind: IpAddr,
+    #[arg(long, default_value_t = DEFAULT_PORT)] port: u16,
+    #[arg(long)] cache_path: Option<PathBuf>
 }
 
 static CONFIG_STR: OnceLock<String> = OnceLock::new();
 static CONFIG: OnceLock<url_cleaner::types::Config> = OnceLock::new();
 static MAX_JSON_SIZE: OnceLock<rocket::data::ByteUnit> = OnceLock::new();
+static CACHE_HANDLER: OnceLock<url_cleaner::glue::CacheHandler> = OnceLock::new();
 
 #[launch]
 fn rocket() -> _ {
@@ -44,11 +61,12 @@ fn rocket() -> _ {
         let params_diff: url_cleaner::types::ParamsDiff = serde_json::from_str(&read_to_string(params_diff).unwrap()).unwrap();
         params_diff.apply(&mut config.params);
     }
+    CACHE_HANDLER.set(args.cache_path.as_deref().unwrap_or(config.cache_path.as_path()).try_into().unwrap()).unwrap();
     CONFIG.set(config).unwrap();
     MAX_JSON_SIZE.set(args.max_size).unwrap();
 
     rocket::custom(rocket::Config {
-        address: args.ip,
+        address: args.bind,
         port: args.port,
         limits: Limits::default().limit("json", args.max_size),
         ..rocket::Config::default()
@@ -86,38 +104,24 @@ struct Job {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct JobResponse {
+struct OkJobResponse {
     urls: Vec<Result<Url, JobError>>
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct JobError {
     r#type: String,
-    source: String,
     error: String
 }
 
 #[post("/", data="<job>")]
-fn clean(job: Json<Job>) -> Json<JobResponse> {
+fn clean(job: Json<Job>) -> Json<Result<OkJobResponse, JobError>> {
     let job = job.0;
-    let config = if let Some(params_diff) = job.params_diff {
-        let mut config = CONFIG.get().unwrap().clone();
-        params_diff.apply(&mut config.params);
-        Cow::Owned(config)
-    } else {
-        Cow::Borrowed(CONFIG.get().unwrap())
-    };
-    Json(JobResponse {
-        urls: job.urls
-            .into_iter()
-            .map(|url| {
-                let mut url = Url::parse(&url)
-                    .map_err(|e| JobError { r#type: "ParseError".to_string(), source: url            , error: e.to_string() })?;
-                config.apply(&mut url)
-                    .map_err(|e| JobError { r#type: "RuleError" .to_string(), source: url.to_string(), error: e.to_string() })?;
-                Ok(url)
-            })
-            .collect()
+    Json(match url_cleaner::clean_owned_strings_with_cache_handler(job.urls, None, job.params_diff.as_ref(), CACHE_HANDLER.get().unwrap()) {
+        Ok(urls) => Ok(OkJobResponse {
+            urls: urls.into_iter().map(|result| result.map_err(|e| JobError {r#type: "JobError".to_string(), error: e.to_string()})).collect()
+        }),
+        Err(e) => Err(JobError {r#type: "CantStartJobError".to_string(), error: e.to_string()})
     })
 }
 

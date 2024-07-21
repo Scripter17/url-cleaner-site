@@ -12,14 +12,14 @@
 // ==/UserScript==
 
 window.URL_CLEANER_SITE = "localhost:9149";
-window.PARAMS_DIFF = {};
+window.PARAMS_DIFF = {"vars": {"SOURCE_URL": window.location.href, "SOURCE_HOST": window.location.hostname}};
 
-await GM_xmlhttpRequest({
+(async () => {await GM_xmlhttpRequest({
 	url: `http://${window.URL_CLEANER_SITE}/get-max-json-size`,
 	onload: function(response) {
 		window.MAX_JSON_SIZE = parseInt(response.responseText);
 	}
-});
+})});
 
 async function clean_all_urls_on_page() {
 	var elements = [...document.getElementsByTagName("a")]
@@ -48,22 +48,27 @@ async function clean_all_urls_on_page() {
 			method: "POST",
 			data: JSON.stringify({urls: elements.map(x => x.href), params_diff: window.PARAMS_DIFF}),
 			onload: function(response) {
-				JSON.parse(response.responseText).urls.forEach(function (cleaning_result, index) {
-					// Any language without proper enums and pattern matching has terrible ergonomics.
-					if (cleaning_result.Err == null) { // Go ain't special.
-						if (elements[index].href != cleaning_result.Ok) {elements[index].href = cleaning_result.Ok;}
-						elements[index].setAttribute("url-cleaned", "success");
-					} else {
-						console.error("URL Cleaner error:", cleaning_result, index, elements[index]);
-						elements[index].setAttribute("url-cleaned", "response-error");
-						elements[index].setAttribute("url-cleaner-error", cleaning_result.Err);
-						elements[index].style.color = "red";
-					}
-				})
+				response = JSON.parse(response.responseText);
+				if (response.Err == null) {
+					response.Ok.urls.forEach(function (cleaning_result, index) {
+						// Any language without proper enums and pattern matching has terrible ergonomics.
+						if (cleaning_result.Err == null) { // Go ain't special.
+							if (elements[index].href != cleaning_result.Ok) {elements[index].href = cleaning_result.Ok;}
+							elements[index].setAttribute("url-cleaned", "success");
+						} else {
+							console.error("URL Cleaner error:", cleaning_result, index, elements[index]);
+							elements[index].setAttribute("url-cleaned", "response-error");
+							elements[index].setAttribute("url-cleaner-error", cleaning_result.Err);
+							elements[index].style.color = "red";
+						}
+					})
+				} else {
+					console.error(`URL Cleaner Site could not load the config. ${response.Err}`);
+				}
 			}
 		});
 	}
 	setTimeout(clean_all_urls_on_page, 500);
 }
 
-await clean_all_urls_on_page();
+(async () => {await clean_all_urls_on_page();})();
