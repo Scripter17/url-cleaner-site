@@ -117,7 +117,7 @@ struct JobError {
 #[post("/", data="<job>")]
 fn clean(job: Json<Job>) -> Json<Result<OkJobResponse, JobError>> {
     let job = job.0;
-    Json(match url_cleaner::clean_owned_strings_with_cache_handler(job.urls, None, job.params_diff.as_ref(), CACHE_HANDLER.get().unwrap()) {
+    Json(match url_cleaner::clean_owned_strings_with_cache_handler(job.urls, CONFIG.get(), job.params_diff.as_ref(), CACHE_HANDLER.get().unwrap()) {
         Ok(urls) => Ok(OkJobResponse {
             urls: urls.into_iter().map(|result| result.map_err(|e| JobError {r#type: "JobError".to_string(), error: e.to_string()})).collect()
         }),
