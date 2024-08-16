@@ -19,7 +19,7 @@ window.PARAMS_DIFF = {"vars": {"SOURCE_URL": window.location.href, "SOURCE_HOST"
 	onload: function(response) {
 		window.MAX_JSON_SIZE = parseInt(response.responseText);
 	}
-})});
+})})();
 
 function elements_to_bulk_job(elements) {
     return {jobs: elements.map(x => element_to_job_config(x)), params_diff: window.PARAMS_DIFF};
@@ -31,7 +31,7 @@ function element_to_job_config(element) {
             url: element.href,
             context: {
                 vars: {
-                    alt_text: element.innerText
+                    alt_text: element.childNodes[0].innerText + (element.childNodes[1].textContent) + (element.childNodes[2]?.innerText ?? "")
                 }
             }
         }
@@ -84,4 +84,4 @@ async function clean_all_urls_on_page() {
 	setTimeout(clean_all_urls_on_page, 500);
 }
 
-await clean_all_urls_on_page();
+(async () => {await clean_all_urls_on_page()})();
