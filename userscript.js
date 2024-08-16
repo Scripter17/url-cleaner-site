@@ -21,13 +21,32 @@ window.PARAMS_DIFF = {"vars": {"SOURCE_URL": window.location.href, "SOURCE_HOST"
 	}
 })});
 
+function elements_to_bulk_job(elements) {
+    return {jobs: elements.map(x => element_to_job_config(x)), params_diff: window.PARAMS_DIFF};
+}
+
+function element_to_job_config(element) {
+    if (window.location.hostname == "x.com" && element.href.startsWith("https://t.co/") && element.innerText.startsWith("http")) {
+        return {
+            url: element.href,
+            context: {
+                vars: {
+                    alt_text: element.innerText
+                }
+            }
+        }
+    } else {
+        return element.href
+    }
+}
+
 async function clean_all_urls_on_page() {
 	var elements = [...document.getElementsByTagName("a")]
 		.filter(e => e.href.startsWith("http") && // Relative URLs are replaced with absolute URLs when getting the `href` property. Also cleaning "javscript:void(0)" returns an error for some reason.
 			e.getAttribute("url-cleaned") == null);
 	a: if (elements.length > 0) {
 		// Limit total size of request. Repeated iterations will get all link elements.
-		while (JSON.stringify({urls: elements.map(x => x.href), params_diff: window.PARAMS_DIFF}).length > window.MAX_JSON_SIZE) {
+		while (JSON.stringify(elements_to_bulk_job(elements)).length > window.MAX_JSON_SIZE) {
 			if (elements.length == 1) {
 				// If, somehow, there's a URL that's over 10MaB, this stops it from getting stuck in an infinite loop.
 				elements[0].setAttribute("url-cleaned", "client-error");
@@ -46,29 +65,23 @@ async function clean_all_urls_on_page() {
 		await GM_xmlhttpRequest({
 			url: `http://${window.URL_CLEANER_SITE}/clean`,
 			method: "POST",
-			data: JSON.stringify({urls: elements.map(x => x.href), params_diff: window.PARAMS_DIFF}),
+			data: JSON.stringify(elements_to_bulk_job(elements)),
 			onload: function(response) {
-				response = JSON.parse(response.responseText);
-				if (response.Err == null) {
-					response.Ok.urls.forEach(function (cleaning_result, index) {
-						// Any language without proper enums and pattern matching has terrible ergonomics.
-						if (cleaning_result.Err == null) { // Go ain't special.
-							if (elements[index].href != cleaning_result.Ok) {elements[index].href = cleaning_result.Ok;}
-							elements[index].setAttribute("url-cleaned", "success");
-						} else {
-							console.error("URL Cleaner error:", cleaning_result, index, elements[index]);
-							elements[index].setAttribute("url-cleaned", "response-error");
-							elements[index].setAttribute("url-cleaner-error", cleaning_result.Err);
-							elements[index].style.color = "red";
-						}
-					})
-				} else {
-					console.error(`URL Cleaner Site could not load the config. ${response.Err}`);
-				}
+				JSON.parse(response.responseText).forEach(function (cleaning_result, index) {
+					if (cleaning_result.Err == null) {
+						if (elements[index].href != cleaning_result.Ok) {elements[index].href = cleaning_result.Ok;}
+						elements[index].setAttribute("url-cleaned", "success");
+					} else {
+						console.error("URL Cleaner error:", cleaning_result, index, elements[index]);
+						elements[index].setAttribute("url-cleaned", "response-error");
+						elements[index].setAttribute("url-cleaner-error", cleaning_result.Err);
+						elements[index].style.color = "red";
+					}
+				})
 			}
 		});
 	}
 	setTimeout(clean_all_urls_on_page, 500);
 }
 
-(async () => {await clean_all_urls_on_page();})();
+await clean_all_urls_on_page();

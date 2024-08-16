@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::fs::read_to_string;
 use std::str::FromStr;
+use std::borrow::Cow;
 
 use clap::Parser;
 use url::Url;
@@ -96,16 +97,11 @@ fn get_config() -> &'static str {
     CONFIG_STR.get().unwrap()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Job {
-    urls: Vec<String>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct BulkJob {
+    jobs: Vec<url_cleaner::types::JobConfig>,
     #[serde(default)]
     params_diff: Option<url_cleaner::types::ParamsDiff>
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct OkJobResponse {
-    urls: Vec<Result<Url, JobError>>
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,15 +110,29 @@ struct JobError {
     error: String
 }
 
-#[post("/", data="<job>")]
-fn clean(job: Json<Job>) -> Json<Result<OkJobResponse, JobError>> {
-    let job = job.0;
-    Json(match url_cleaner::clean_owned_strings_with_cache_handler(job.urls, CONFIG.get(), job.params_diff.as_ref(), CACHE_HANDLER.get().unwrap()) {
-        Ok(urls) => Ok(OkJobResponse {
-            urls: urls.into_iter().map(|result| result.map_err(|e| JobError {r#type: "JobError".to_string(), error: e.to_string()})).collect()
-        }),
-        Err(e) => Err(JobError {r#type: "CantStartJobError".to_string(), error: e.to_string()})
-    })
+#[post("/", data="<bulk_job>")]
+fn clean(bulk_job: Json<BulkJob>) -> Json<Vec<Result<Url, JobError>>> {
+    let bulk_job = bulk_job.0;
+    let mut config = Cow::Borrowed(CONFIG.get().unwrap());
+    if let Some(params_diff) = bulk_job.params_diff {
+        params_diff.apply(&mut config.to_mut().params);
+    }
+    Json(bulk_job.jobs.into_iter()
+        .map(|job_config|
+            url_cleaner::types::Job {
+                url: job_config.url,
+                config: &*config,
+                context: job_config.context,
+                cache_handler: CACHE_HANDLER.get().unwrap()
+            }.r#do().map_err(|e| JobError {r#type: "JobError".to_string(), error: e.to_string()})
+        )
+        .collect())
+    // Json(match url_cleaner::clean_owned_strings_with_cache_handler(bulk_job.urls, CONFIG.get(), job.params_diff.as_ref(), CACHE_HANDLER.get().unwrap()) {
+    //     Ok(urls) => Ok(OkJobResponse {
+    //         urls: urls.into_iter().map(|result| result.map_err(|e| JobError {r#type: "JobError".to_string(), error: e.to_string()})).collect()
+    //     }),
+    //     Err(e) => Err(JobError {r#type: "CantStartJobError".to_string(), error: e.to_string()})
+    // })
 }
 
 #[get("/")]
