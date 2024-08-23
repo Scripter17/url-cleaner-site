@@ -39,7 +39,7 @@ for url in "${URLS[@]}"; do
     hyperfine\
       -L url "$url"\
       -L num $NUMS\
-      --prepare "bash -c \"yes '\\\"$url\\\"' | head -n {num} | head -c -1 | jq -rsc '{urls:.}' > stdin\""\
+      --prepare "bash -c \"yes '\\\"$url\\\"' | head -n {num} | head -c -1 | jq -rsc '{jobs:.}' > stdin\""\
       --max-runs 100\
       --warmup 20\
       --input stdin\

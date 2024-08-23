@@ -22,22 +22,22 @@ window.PARAMS_DIFF = {"vars": {"SOURCE_URL": window.location.href, "SOURCE_HOST"
 })})();
 
 function elements_to_bulk_job(elements) {
-    return {jobs: elements.map(x => element_to_job_config(x)), params_diff: window.PARAMS_DIFF};
+	return {jobs: elements.map(x => element_to_job_config(x)), params_diff: window.PARAMS_DIFF};
 }
 
 function element_to_job_config(element) {
-    if (window.location.hostname == "x.com" && element.href.startsWith("https://t.co/") && element.innerText.startsWith("http")) {
-        return {
-            url: element.href,
-            context: {
-                vars: {
-                    alt_text: element.childNodes[0].innerText + (element.childNodes[1].textContent) + (element.childNodes[2]?.innerText ?? "")
-                }
-            }
-        }
-    } else {
-        return element.href
-    }
+	if (window.location.hostname == "x.com" && element.href.startsWith("https://t.co/") && element.innerText.startsWith("http")) {
+		return {
+			url: element.href,
+			context: {
+				vars: {
+					alt_text: element.childNodes[0].innerText + (element.childNodes[1].textContent) + (element.childNodes[2]?.innerText ?? "")
+				}
+			}
+		}
+	} else {
+		return element.href
+	}
 }
 
 async function clean_all_urls_on_page() {

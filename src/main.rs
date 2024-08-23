@@ -121,7 +121,7 @@ fn clean(bulk_job: Json<BulkJob>) -> Json<Vec<Result<Url, JobError>>> {
         .map(|job_config|
             url_cleaner::types::Job {
                 url: job_config.url,
-                config: &*config,
+                config: &config,
                 context: job_config.context,
                 cache_handler: CACHE_HANDLER.get().unwrap()
             }.r#do().map_err(|e| JobError {r#type: "JobError".to_string(), error: e.to_string()})
