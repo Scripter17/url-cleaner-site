@@ -16,9 +16,12 @@ use clap::Parser;
 use url::Url;
 use serde::{Serialize, Deserialize};
 
+use url_cleaner::types::*;
+use url_cleaner::glue::*;
+
 const DEFAULT_MAX_JSON_SIZE: &str = "25MiB";
-const DEFAULT_BIND_IP: &str = "127.0.0.1";
-const DEFAULT_PORT: u16 = 9149;
+const DEFAULT_BIND_IP      : &str = "127.0.0.1";
+const DEFAULT_PORT         : u16  = 9149;
 
 /// Clap doesn't like `<rocket::data::ByteUnit as FromStr>::Error`.
 fn parse_byte_unit(s: &str) -> Result<rocket::data::ByteUnit, String> {
@@ -47,19 +50,19 @@ struct Args {
     #[arg(long)] cache_path: Option<PathBuf>
 }
 
-static CONFIG_STR: OnceLock<String> = OnceLock::new();
-static CONFIG: OnceLock<url_cleaner::types::Config> = OnceLock::new();
+static CONFIG_STRING: OnceLock<String>                 = OnceLock::new();
+static CONFIG       : OnceLock<Config>                 = OnceLock::new();
 static MAX_JSON_SIZE: OnceLock<rocket::data::ByteUnit> = OnceLock::new();
-static CACHE_HANDLER: OnceLock<url_cleaner::glue::CacheHandler> = OnceLock::new();
+static CACHE_HANDLER: OnceLock<CacheHandler>           = OnceLock::new();
 
 #[launch]
 fn rocket() -> _ {
     let args = Args::parse();
 
-    CONFIG_STR.set(args.config.as_deref().map(|path| read_to_string(path).unwrap()).unwrap_or(url_cleaner::types::DEFAULT_CONFIG_STR.to_string())).unwrap();
-    let mut config: url_cleaner::types::Config = serde_json::from_str(CONFIG_STR.get().unwrap()).unwrap();
+    CONFIG_STRING.set(args.config.as_deref().map(|path| read_to_string(path).unwrap()).unwrap_or(DEFAULT_CONFIG_STR.to_string())).unwrap();
+    let mut config: Config = serde_json::from_str(CONFIG_STRING.get().unwrap()).unwrap();
     if let Some(params_diff) = args.params_diff {
-        let params_diff: url_cleaner::types::ParamsDiff = serde_json::from_str(&read_to_string(params_diff).unwrap()).unwrap();
+        let params_diff: ParamsDiff = serde_json::from_str(&read_to_string(params_diff).unwrap()).unwrap();
         params_diff.apply(&mut config.params);
     }
     CACHE_HANDLER.set(args.cache_path.as_deref().unwrap_or(config.cache_path.as_path()).try_into().unwrap()).unwrap();
@@ -94,20 +97,38 @@ The modified source code of URL Cleaner Site (if applicable): "#
 
 #[get("/")]
 fn get_config() -> &'static str {
-    CONFIG_STR.get().unwrap()
+    CONFIG_STRING.get().unwrap()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct BulkJob {
-    jobs: Vec<url_cleaner::types::JobConfig>,
+    jobs: Vec<JobConfig>,
     #[serde(default)]
-    params_diff: Option<url_cleaner::types::ParamsDiff>
+    params_diff: Option<ParamsDiff>
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct JobError {
-    r#type: String,
+    r#type: &'static str,
     error: String
+}
+
+impl From<GetJobError> for JobError {
+    fn from(value: GetJobError) -> Self {
+        Self {
+            r#type: "GetJobError",
+            error: value.to_string()
+        }
+    }
+}
+
+impl From<DoJobError> for JobError {
+    fn from(value: DoJobError) -> Self {
+        Self {
+            r#type: "DoJobError",
+            error: value.to_string()
+        }
+    }
 }
 
 #[post("/", data="<bulk_job>")]
@@ -117,22 +138,11 @@ fn clean(bulk_job: Json<BulkJob>) -> Json<Vec<Result<Url, JobError>>> {
     if let Some(params_diff) = bulk_job.params_diff {
         params_diff.apply(&mut config.to_mut().params);
     }
-    Json(bulk_job.jobs.into_iter()
-        .map(|job_config|
-            url_cleaner::types::Job {
-                url: job_config.url,
-                config: &config,
-                context: job_config.context,
-                cache_handler: CACHE_HANDLER.get().unwrap()
-            }.r#do().map_err(|e| JobError {r#type: "JobError".to_string(), error: e.to_string()})
-        )
-        .collect())
-    // Json(match url_cleaner::clean_owned_strings_with_cache_handler(bulk_job.urls, CONFIG.get(), job.params_diff.as_ref(), CACHE_HANDLER.get().unwrap()) {
-    //     Ok(urls) => Ok(OkJobResponse {
-    //         urls: urls.into_iter().map(|result| result.map_err(|e| JobError {r#type: "JobError".to_string(), error: e.to_string()})).collect()
-    //     }),
-    //     Err(e) => Err(JobError {r#type: "CantStartJobError".to_string(), error: e.to_string()})
-    // })
+    Json(Jobs {
+        config,
+        cache_handler: CACHE_HANDLER.get().unwrap().clone(),
+        job_source: Box::new(bulk_job.jobs.into_iter().map(Ok))
+    }.r#do().into_iter().map(|job_result| Ok(job_result??)).collect())
 }
 
 #[get("/")]

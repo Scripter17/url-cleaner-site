@@ -69,11 +69,15 @@ async function clean_all_urls_on_page() {
 			onload: function(response) {
 				JSON.parse(response.responseText).forEach(function (cleaning_result, index) {
 					if (cleaning_result.Err == null) {
-						if (elements[index].href != cleaning_result.Ok) {elements[index].href = cleaning_result.Ok;}
-						elements[index].setAttribute("url-cleaned", "success");
+						if (elements[index].href != cleaning_result.Ok) {
+							elements[index].href = cleaning_result.Ok;
+							elements[index].setAttribute("url-cleaned", "success");
+						} else {
+							elements[index].setAttribute("url-cleaned", "unchanged");
+						}
 					} else {
 						console.error("URL Cleaner error:", cleaning_result, index, elements[index]);
-						elements[index].setAttribute("url-cleaned", "response-error");
+						elements[index].setAttribute("url-cleaned", "error");
 						elements[index].setAttribute("url-cleaner-error", cleaning_result.Err);
 						elements[index].style.color = "red";
 					}
