@@ -22,7 +22,7 @@ window.PARAMS_DIFF = {"vars": {"SOURCE_URL": window.location.href, "SOURCE_HOST"
 })})();
 
 function elements_to_bulk_job(elements) {
-	return {jobs: elements.map(x => element_to_job_config(x)), params_diff: window.PARAMS_DIFF};
+	return {urls: elements.map(x => element_to_job_config(x)), params_diff: window.PARAMS_DIFF};
 }
 
 function element_to_job_config(element) {
@@ -43,7 +43,7 @@ function element_to_job_config(element) {
 async function clean_all_urls_on_page() {
 	var elements = [...document.getElementsByTagName("a")]
 		.filter(e => e.href.startsWith("http") && // Relative URLs are replaced with absolute URLs when getting the `href` property. Also cleaning "javscript:void(0)" returns an error for some reason.
-			e.getAttribute("url-cleaned") == null);
+			e.getAttribute("url-cleaner") == null);
 	a: if (elements.length > 0) {
 		// Limit total size of request. Repeated iterations will get all link elements.
 		while (JSON.stringify(elements_to_bulk_job(elements)).length > window.MAX_JSON_SIZE) {
@@ -67,21 +67,26 @@ async function clean_all_urls_on_page() {
 			method: "POST",
 			data: JSON.stringify(elements_to_bulk_job(elements)),
 			onload: function(response) {
-				JSON.parse(response.responseText).forEach(function (cleaning_result, index) {
-					if (cleaning_result.Err == null) {
-						if (elements[index].href != cleaning_result.Ok) {
-							elements[index].href = cleaning_result.Ok;
-							elements[index].setAttribute("url-cleaned", "success");
+				let result = JSON.parse(response.responseText);
+				if (result.Ok !== null) {
+					result.Ok.urls.forEach(function (cleaning_result, index) {
+						if (cleaning_result.Err == null) {
+							if (elements[index].href != cleaning_result.Ok) {
+								elements[index].href = cleaning_result.Ok;
+								elements[index].setAttribute("url-cleaner", "success");
+							} else {
+								elements[index].setAttribute("url-cleaner", "unchanged");
+							}
 						} else {
-							elements[index].setAttribute("url-cleaned", "unchanged");
+							console.error("URL Cleaner job error:", cleaning_result, index, elements[index]);
+							elements[index].setAttribute("url-cleaner", "error");
+							elements[index].setAttribute("url-cleaner-error", JSON.stringify(cleaning_result.Err));
+							elements[index].style.color = "red";
 						}
-					} else {
-						console.error("URL Cleaner error:", cleaning_result, index, elements[index]);
-						elements[index].setAttribute("url-cleaned", "error");
-						elements[index].setAttribute("url-cleaner-error", cleaning_result.Err);
-						elements[index].style.color = "red";
-					}
-				})
+					})
+				} else {
+					console.error("URL Cleaner bulk job error", result);
+				}
 			}
 		});
 	}

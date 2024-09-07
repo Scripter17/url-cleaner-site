@@ -1,8 +1,7 @@
 #[macro_use] extern crate rocket;
 use rocket::serde::json::Json;
-use rocket::http::Header;
-use rocket::{Request, Response};
-use rocket::fairing::{Fairing, Info, Kind};
+use rocket::http::Status;
+use rocket::Request;
 use rocket::data::Limits;
 
 use std::net::IpAddr;
@@ -75,49 +74,57 @@ fn rocket() -> _ {
         limits: Limits::default().limit("json", args.max_size),
         ..rocket::Config::default()
     })
-        .mount("/", routes![index])
+        .mount("/", routes![index, clean, get_max_json_size, get_config])
         .mount("/clean", routes![clean])
+        .register("/clean", catchers![clean_error])
         .mount("/get-max-json-size", routes![get_max_json_size])
         .mount("/get-config", routes![get_config])
-        .attach(Anarcors)
 }
 
 #[get("/")]
 fn index() -> &'static str {
     r#"Both URL Cleaner Site and URL Cleaner are licensed under the Affero General Public License V3 or later (SPDX: AGPL-3.0-or-later).
-https://en.wikipedia.org/wiki/GNU_Affero_General_Public_License
 https://www.gnu.org/licenses/agpl-3.0.html
 
-The original source code of URL Cleaner: https://github.com/Scripter17/url-cleaner
 The original source code of URL Cleaner Site: https://github.com/Scripter17/url-cleaner-site
+The original source code of URL Cleaner: https://github.com/Scripter17/url-cleaner
 
-The modified source code of URL Cleaner (if applicable): 
-The modified source code of URL Cleaner Site (if applicable): "#
+The modified source code of URL Cleaner Site (if applicable):
+The modified source code of URL Cleaner (if applicable):"#
 }
 
-#[get("/")]
+#[get("/get_config")]
 fn get_config() -> &'static str {
     CONFIG_STRING.get().unwrap()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct BulkJob {
-    jobs: Vec<JobConfig>,
+pub struct BulkJob {
+    #[serde(alias = "urls", alias = "configs")]
+    pub job_configs: Vec<JobConfig>,
     #[serde(default)]
-    params_diff: Option<ParamsDiff>
+    pub params_diff: Option<ParamsDiff>
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct JobError {
-    r#type: &'static str,
-    error: String
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobError {
+    pub r#type: JobErrorType,
+    pub message: String,
+    pub variant: String
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum JobErrorType {
+    GetJobError,
+    DoJobError
 }
 
 impl From<GetJobError> for JobError {
     fn from(value: GetJobError) -> Self {
         Self {
-            r#type: "GetJobError",
-            error: value.to_string()
+            r#type: JobErrorType::GetJobError,
+            message: value.to_string(),
+            variant: format!("{value:?}")
         }
     }
 }
@@ -125,46 +132,49 @@ impl From<GetJobError> for JobError {
 impl From<DoJobError> for JobError {
     fn from(value: DoJobError) -> Self {
         Self {
-            r#type: "DoJobError",
-            error: value.to_string()
+            r#type: JobErrorType::DoJobError,
+            message: value.to_string(),
+            variant: format!("{value:?}")
         }
     }
 }
 
-#[post("/", data="<bulk_job>")]
-fn clean(bulk_job: Json<BulkJob>) -> Json<Vec<Result<Url, JobError>>> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CleaningSuccess {
+    pub urls: Vec<Result<Url, JobError>>
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CleaningError {
+    status: u16,
+    reason: Option<&'static str>
+}
+
+#[post("/clean", data="<bulk_job>")]
+fn clean(bulk_job: Json<BulkJob>) -> Json<Result<CleaningSuccess, ()>> {
     let bulk_job = bulk_job.0;
     let mut config = Cow::Borrowed(CONFIG.get().unwrap());
     if let Some(params_diff) = bulk_job.params_diff {
         params_diff.apply(&mut config.to_mut().params);
     }
-    Json(Jobs {
-        config,
-        cache_handler: CACHE_HANDLER.get().unwrap().clone(),
-        job_source: Box::new(bulk_job.jobs.into_iter().map(Ok))
-    }.r#do().into_iter().map(|job_result| Ok(job_result??)).collect())
+    Json(Ok(CleaningSuccess {
+        urls: Jobs {
+            config,
+            cache_handler: CACHE_HANDLER.get().unwrap().clone(), // It's a newtype around an Arc, so cloning is O(1).
+            configs_source: Box::new(bulk_job.job_configs.into_iter().map(Ok))
+        }.r#do().into_iter().map(|job_result| Ok(job_result??)).collect()
+    }))
 }
 
-#[get("/")]
+#[catch(default)]
+fn clean_error(status: Status, _request: &Request) -> Json<Result<(), CleaningError>> {
+    Json(Err(CleaningError {
+        status: status.code,
+        reason: status.reason()
+    }))
+}
+
+#[get("/get_max_json_size")]
 fn get_max_json_size() -> String {
     MAX_JSON_SIZE.get().unwrap().as_u64().to_string()
-}
-
-struct Anarcors;
-
-#[rocket::async_trait]
-impl Fairing for Anarcors {
-    fn info(&self) -> Info {
-        Info {
-            name: "Add CORS headers to response",
-            kind: Kind::Response
-        }
-    }
-
-    async fn on_response<'r>(&self, _request: &'r Request<'_>, response: &mut Response<'r>) {
-        response.set_header(Header::new("Access-Control-Allow-Origin", "*"));
-        response.set_header(Header::new("Access-Control-Allow-Methods", "POST, PATCH, PUT, DELETE, HEAD, OPTIONS, GET"));
-        response.set_header(Header::new("Access-Control-Allow-Headers", "*"));
-        response.set_header(Header::new("Access-Control-Allow-Credentials", "true"));
-    }
 }

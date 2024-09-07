@@ -15,27 +15,40 @@ A very basic HTTP server and userscript to allow automatically applying [URL Cle
 It binds to `0.0.0.0:9149` by default and `http://localhost:9149/clean` takes a simple job of the following form
 
 ```Rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Job {
-    urls: Vec<String>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BulkJob {
+    #[serde(alias = "urls", alias = "configs")]
+    pub job_configs: Vec<JobConfig>,
     #[serde(default)]
-    params_diff: Option<url_cleaner::types::ParamsDiff>
+    pub params_diff: Option<ParamsDiff>
 }
 ```
 
-and returns a response of the following form
+and returns a response `Result<CleaningSuccess, CleaningError>` which is defined as
 
 ```Rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct JobResponse {
-    urls: Vec<Result<Url, JobError>>
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CleaningSuccess {
+    pub urls: Vec<Result<Url, JobError>>
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct JobError {
-    r#type: String,
-    source_url: String,
-    error: String
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobError {
+    pub r#type: JobErrorType,
+    pub message: String,
+    pub variant: String
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum JobErrorType {
+    GetJobError,
+    DoJobError
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CleaningError {
+    status: u16,
+    reason: Option<&'static str>
 }
 ```
 
