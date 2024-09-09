@@ -1,3 +1,5 @@
+//! A basic HTTP server and userscript to allow automatically applying [URL Cleaner](https://github.com/Scripter17/url-cleaner) to every URL on every webpage you visit.
+
 #[macro_use] extern crate rocket;
 use rocket::serde::json::Json;
 use rocket::http::Status;
@@ -12,14 +14,18 @@ use std::str::FromStr;
 use std::borrow::Cow;
 
 use clap::Parser;
-use url::Url;
-use serde::{Serialize, Deserialize};
 
 use url_cleaner::types::*;
 use url_cleaner::glue::*;
 
+mod types;
+use types::*;
+
+/// The default max size of a payload to the [`clean`] route.
 const DEFAULT_MAX_JSON_SIZE: &str = "25MiB";
+/// The default IP to listen to.
 const DEFAULT_BIND_IP      : &str = "127.0.0.1";
+/// The default port to listen to.
 const DEFAULT_PORT         : u16  = 9149;
 
 /// Clap doesn't like `<rocket::data::ByteUnit as FromStr>::Error`.
@@ -27,6 +33,7 @@ fn parse_byte_unit(s: &str) -> Result<rocket::data::ByteUnit, String> {
     rocket::data::ByteUnit::from_str(s).map_err(|x| x.to_string())
 }
 
+/// The command line argument format.
 #[derive(Debug, Parser)]
 struct Args {
     /// A url_cleaner::types::Config JSON file. If none is provided, uses URL Cleaner's default config.
@@ -37,36 +44,37 @@ struct Args {
     /// 
     /// The included userscript uses the `/get-max-json-size` endpoint to query this value and adjust its batch sizes accordingly.
     #[arg(long, default_value = DEFAULT_MAX_JSON_SIZE, value_parser = parse_byte_unit)] max_size: rocket::data::ByteUnit,
-    /// 127.0.0.1 should be used when only using the userscript.
-    /// 
-    /// 0.0.0.0 is the simplest way to allow other computers to use this instance of URL Cleaner Site.
-    /// 
-    /// Please note that while URL Cleaner Site is written in Rust, the default config makes HTTP requests and could therefore be used as a denial of service vector.
-    /// 
-    /// 0.0.0.0 should only be used on networks you trust and/or behind a firewall.
+    /// The IP to listen to.
     #[arg(long, default_value = DEFAULT_BIND_IP, aliases = ["ip", "address"])] bind: IpAddr,
+    /// The port to listen to.
     #[arg(long, default_value_t = DEFAULT_PORT)] port: u16,
-    #[arg(long)] cache_path: Option<PathBuf>
+    /// The path of the cache.
+    #[arg(long)] cache_path: Option<String>
 }
 
+/// The [`Config`] to use as a [`String`].
 static CONFIG_STRING: OnceLock<String>                 = OnceLock::new();
+/// The [`Config`] to use.
 static CONFIG       : OnceLock<Config>                 = OnceLock::new();
+/// The max size of a payload to the [`clean`] route.
 static MAX_JSON_SIZE: OnceLock<rocket::data::ByteUnit> = OnceLock::new();
+/// The [`CacheHandler`] to use.
 static CACHE_HANDLER: OnceLock<CacheHandler>           = OnceLock::new();
 
+/// Make the server.
 #[launch]
 fn rocket() -> _ {
     let args = Args::parse();
 
-    CONFIG_STRING.set(args.config.as_deref().map(|path| read_to_string(path).unwrap()).unwrap_or(DEFAULT_CONFIG_STR.to_string())).unwrap();
-    let mut config: Config = serde_json::from_str(CONFIG_STRING.get().unwrap()).unwrap();
+    CONFIG_STRING.set(args.config.as_deref().map(|path| read_to_string(path).expect("Reading the Config file to a string to not error.")).unwrap_or(DEFAULT_CONFIG_STR.to_string())).expect("The CONFIG_STRING global static to have not been set.");
+    let mut config: Config = serde_json::from_str(CONFIG_STRING.get().expect("The CONFIG_STRING global static to have just been set.")).expect("The CONFIG_STRING to be a valid Config.");
     if let Some(params_diff) = args.params_diff {
-        let params_diff: ParamsDiff = serde_json::from_str(&read_to_string(params_diff).unwrap()).unwrap();
+        let params_diff: ParamsDiff = serde_json::from_str(&read_to_string(params_diff).expect("Reading the ParamsDiff file to a string to not error.")).expect("The read ParamsDiff file to be a valid ParamsDiff.");
         params_diff.apply(&mut config.params);
     }
-    CACHE_HANDLER.set(args.cache_path.as_deref().unwrap_or(config.cache_path.as_path()).try_into().unwrap()).unwrap();
-    CONFIG.set(config).unwrap();
-    MAX_JSON_SIZE.set(args.max_size).unwrap();
+    CACHE_HANDLER.set(args.cache_path.as_deref().unwrap_or(&*config.cache_path).into()).expect("The CACHE_HANDLER global static have not been already set.");
+    CONFIG.set(config).expect("The CONFIG global static to have not been already set.");
+    MAX_JSON_SIZE.set(args.max_size).expect("The MAX_JSON_SIZE global static to have not been already set.");
 
     rocket::custom(rocket::Config {
         address: args.bind,
@@ -74,13 +82,14 @@ fn rocket() -> _ {
         limits: Limits::default().limit("json", args.max_size),
         ..rocket::Config::default()
     })
-        .mount("/", routes![index, clean, get_max_json_size, get_config])
+        .mount("/", routes![index])
         .mount("/clean", routes![clean])
         .register("/clean", catchers![clean_error])
         .mount("/get-max-json-size", routes![get_max_json_size])
         .mount("/get-config", routes![get_config])
 }
 
+/// The `/` route.
 #[get("/")]
 fn index() -> &'static str {
     r#"Both URL Cleaner Site and URL Cleaner are licensed under the Affero General Public License V3 or later (SPDX: AGPL-3.0-or-later).
@@ -93,88 +102,40 @@ The modified source code of URL Cleaner Site (if applicable):
 The modified source code of URL Cleaner (if applicable):"#
 }
 
-#[get("/get_config")]
+/// The `/get-config` route.
+#[get("/")]
 fn get_config() -> &'static str {
-    CONFIG_STRING.get().unwrap()
+    CONFIG_STRING.get().expect("The CONFIG_STRING global static to have been set.")
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BulkJob {
-    #[serde(alias = "urls", alias = "configs")]
-    pub job_configs: Vec<JobConfig>,
-    #[serde(default)]
-    pub params_diff: Option<ParamsDiff>
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JobError {
-    pub r#type: JobErrorType,
-    pub message: String,
-    pub variant: String
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum JobErrorType {
-    GetJobError,
-    DoJobError
-}
-
-impl From<GetJobError> for JobError {
-    fn from(value: GetJobError) -> Self {
-        Self {
-            r#type: JobErrorType::GetJobError,
-            message: value.to_string(),
-            variant: format!("{value:?}")
-        }
-    }
-}
-
-impl From<DoJobError> for JobError {
-    fn from(value: DoJobError) -> Self {
-        Self {
-            r#type: JobErrorType::DoJobError,
-            message: value.to_string(),
-            variant: format!("{value:?}")
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CleaningSuccess {
-    pub urls: Vec<Result<Url, JobError>>
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CleaningError {
-    status: u16,
-    reason: Option<&'static str>
-}
-
-#[post("/clean", data="<bulk_job>")]
+/// The `/clean` route.
+#[post("/", data="<bulk_job>")]
 fn clean(bulk_job: Json<BulkJob>) -> Json<Result<CleaningSuccess, ()>> {
     let bulk_job = bulk_job.0;
-    let mut config = Cow::Borrowed(CONFIG.get().unwrap());
+    let mut config = Cow::Borrowed(CONFIG.get().expect("The CONFIG global static to have been set."));
     if let Some(params_diff) = bulk_job.params_diff {
         params_diff.apply(&mut config.to_mut().params);
     }
     Json(Ok(CleaningSuccess {
         urls: Jobs {
             config,
-            cache_handler: CACHE_HANDLER.get().unwrap().clone(), // It's a newtype around an Arc, so cloning is O(1).
+            cache_handler: CACHE_HANDLER.get().expect("The CACHE_HANDLER global static to have been set.").clone(), // It's a newtype around an Arc, so cloning is O(1).
             configs_source: Box::new(bulk_job.job_configs.into_iter().map(Ok))
         }.r#do().into_iter().map(|job_result| Ok(job_result??)).collect()
     }))
 }
 
+/// The error handler for the `/clean` route.
 #[catch(default)]
-fn clean_error(status: Status, _request: &Request) -> Json<Result<(), CleaningError>> {
-    Json(Err(CleaningError {
+fn clean_error(status: Status, _request: &Request) -> Json<Result<(), crate::types::CleaningError>> {
+    Json(Err(crate::types::CleaningError {
         status: status.code,
         reason: status.reason()
     }))
 }
 
-#[get("/get_max_json_size")]
+/// The `get-max-json-size` route.
+#[get("/")]
 fn get_max_json_size() -> String {
-    MAX_JSON_SIZE.get().unwrap().as_u64().to_string()
+    MAX_JSON_SIZE.get().expect("The MAX_JSON_SIZE global static to have been set.").as_u64().to_string()
 }

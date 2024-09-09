@@ -10,9 +10,9 @@ In the future, there will be a way to block/limit the `params_diff` field but, a
 
 ## Details
 
-A very basic HTTP server and userscript to allow automatically applying [URL Cleaner](https://github.com/Scripter17/url-cleaner) to every URL on every webpage you visit.
+A basic HTTP server and userscript to allow automatically applying [URL Cleaner](https://github.com/Scripter17/url-cleaner) to every URL on every webpage you visit.
 
-It binds to `0.0.0.0:9149` by default and `http://localhost:9149/clean` takes a simple job of the following form
+It binds to `127.0.0.1:9149` by default and `http://localhost:9149/clean` takes a simple job of the following form:
 
 ```Rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,9 +47,10 @@ pub enum JobErrorType {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CleaningError {
-    status: u16,
-    reason: Option<&'static str>
+    pub status: u16,
+    pub reason: Option<&'static str>
 }
 ```
 
-It is intended to be byte-for-byte identical to the equivalent invocation of URL Cleaner in JSON mode.
+It is intended to be byte-for-byte identical to the equivalent invocation of URL Cleaner in JSON mode.  
+This way if one wants to transition from URL Cleaner to URL Cleaner Site (or vice versa) there's very little code to change.
