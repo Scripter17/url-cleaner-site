@@ -11,11 +11,11 @@ license = "AGPL-3.0-or-later"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = "4.5.11"
+clap = "4.5.19"
 rocket = { version = "0.5.1", features = ["json"] }
-serde = "1.0.204"
-serde_json = "1.0.120"
-tokio = { version = "1.39.1", features = ["macros", "rt"] }
+serde = "1.0.210"
+serde_json = "1.0.128"
+tokio = { version = "1.40.0", features = ["macros", "rt"] }
 url = { version = "2.5.2", features = ["serde"] }
 url-cleaner = { path = "../url-cleaner", default-features = false }
 
@@ -35,6 +35,7 @@ default = [
 
   "base64",
 
+  "cache",
   "cache-redirects"
 ]
 
@@ -51,7 +52,7 @@ http = ["url-cleaner/http"]
 advanced-requests = ["url-cleaner/advanced-requests"]
 
 cache = ["url-cleaner/cache"]
-cache-redirects = ["url-cleaner/cache-redirects"]
+cache-redirects = ["cache", "url-cleaner/cache-redirects"]
 
 base64 = ["url-cleaner/base64"]
 

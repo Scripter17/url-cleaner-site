@@ -11,11 +11,11 @@
 // @connect      localhost
 // ==/UserScript==
 
-window.URL_CLEANER_SITE = "localhost:9149";
+window.URL_CLEANER_SITE = "http://localhost:9149";
 window.PARAMS_DIFF = {"vars": {"SOURCE_URL": window.location.href, "SOURCE_HOST": window.location.hostname}};
 
 (async () => {await GM_xmlhttpRequest({
-	url: `http://${window.URL_CLEANER_SITE}/get-max-json-size`,
+	url: `${window.URL_CLEANER_SITE}/get-max-json-size`,
 	onload: function(response) {
 		window.MAX_JSON_SIZE = parseInt(response.responseText);
 	}
@@ -49,7 +49,7 @@ async function clean_all_urls_on_page() {
 		while (JSON.stringify(elements_to_bulk_job(elements)).length > window.MAX_JSON_SIZE) {
 			if (elements.length == 1) {
 				// If, somehow, there's a URL that's over 10MaB, this stops it from getting stuck in an infinite loop.
-				elements[0].setAttribute("url-cleaned", "client-error");
+				elements[0].setAttribute("url-cleaner", "client-error");
 				elements[0].setAttribute("url-cleaner-error", "URL Too long.");
 				elements[0].style.color = "red";
 				break a;
@@ -61,24 +61,32 @@ async function clean_all_urls_on_page() {
 		// `elements.length` should never be `0` at this point.
 		// It shouldn't actually matter but if it happens it is an error.
 
+		let bulk_job = elements_to_bulk_job(elements);
 		// Fuck CORS. I get why it exists and I appreciate it but it is so annoying.
 		await GM_xmlhttpRequest({
-			url: `http://${window.URL_CLEANER_SITE}/clean`,
+			url: `${window.URL_CLEANER_SITE}/clean`,
 			method: "POST",
-			data: JSON.stringify(elements_to_bulk_job(elements)),
+			data: JSON.stringify(bulk_job),
 			onload: function(response) {
 				let result = JSON.parse(response.responseText);
-				if (result.Ok !== null) {
+				if (result.Err == null) {
 					result.Ok.urls.forEach(function (cleaning_result, index) {
 						if (cleaning_result.Err == null) {
-							if (elements[index].href != cleaning_result.Ok) {
-								elements[index].href = cleaning_result.Ok;
-								elements[index].setAttribute("url-cleaner", "success");
+							if (cleaning_result.Ok.Err == null) {
+								if (elements[index].href != cleaning_result.Ok.Ok) {
+									elements[index].href = cleaning_result.Ok.Ok;
+									elements[index].setAttribute("url-cleaner", "success");
+								} else {
+									elements[index].setAttribute("url-cleaner", "unchanged");
+								}
 							} else {
-								elements[index].setAttribute("url-cleaner", "unchanged");
+								console.error("URL Cleaner DoJobError:", cleaning_result, "Element indesx:", index, "Element:", elements[index], "Job:", bulk_job[index]);
+								elements[index].setAttribute("url-cleaner", "DoJobError");
+								elements[index].setAttribute("url-cleaner-error", JSON.stringify(cleaning_result.Ok.Err));
+								elements[index].style.color = "red";
 							}
 						} else {
-							console.error("URL Cleaner job error:", cleaning_result, index, elements[index]);
+							console.error("URL Cleaner GetJobError:", cleaning_result, "Element indesx:", index, "Element:", elements[index], "Job:", bulk_job[index]);
 							elements[index].setAttribute("url-cleaner", "error");
 							elements[index].setAttribute("url-cleaner-error", JSON.stringify(cleaning_result.Err));
 							elements[index].style.color = "red";
