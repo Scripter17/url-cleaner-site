@@ -87,7 +87,7 @@ async function clean_all_urls_on_page() {
 							}
 						} else {
 							console.error("URL Cleaner GetJobError:", cleaning_result, "Element indesx:", index, "Element:", elements[index], "Job:", bulk_job[index]);
-							elements[index].setAttribute("url-cleaner", "error");
+							elements[index].setAttribute("url-cleaner", "GetJobError");
 							elements[index].setAttribute("url-cleaner-error", JSON.stringify(cleaning_result.Err));
 							elements[index].style.color = "red";
 						}
