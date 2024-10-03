@@ -27,25 +27,20 @@ pub struct BulkJob {
 and returns a response `Result<CleaningSuccess, CleaningError>` which is defined as
 
 ```Rust
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CleaningSuccess {
-    pub urls: Vec<Result<Url, JobError>>
+    pub urls: Vec<Result<Result<Url, StringDoJobError>, StringGetJobError>>
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JobError {
-    pub r#type: JobErrorType,
+pub struct StringGetJobError {
     pub message: String,
     pub variant: String
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum JobErrorType {
-    GetJobError,
-    DoJobError
+pub struct StringDoJobError {
+    pub message: String,
+    pub variant: String
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CleaningError {
     pub status: u16,
     pub reason: Option<&'static str>
