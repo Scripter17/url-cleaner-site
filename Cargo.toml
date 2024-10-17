@@ -31,7 +31,7 @@ default = [
   "commands",
 
   "http",
-  "advanced-requests",
+  "advanced-http",
 
   "base64",
 
@@ -49,7 +49,7 @@ glob = ["url-cleaner/glob"]
 commands = ["url-cleaner/commands"]
 
 http = ["url-cleaner/http"]
-advanced-requests = ["url-cleaner/advanced-requests"]
+advanced-http = ["url-cleaner/advanced-http"]
 
 cache = ["url-cleaner/cache"]
 cache-redirects = ["cache", "url-cleaner/cache-redirects"]

@@ -125,9 +125,11 @@ async fn clean(bulk_job: Json<BulkJob>) -> Json<Result<CleaningSuccess, ()>> {
             #[cfg(feature = "cache")]
             cache_handler: CACHE_HANDLER.get().expect("The CACHE_HANDLER global static to have been set.").clone(), // It's a newtype around an Arc, so cloning is O(1).
             configs_source: Box::new(bulk_job.job_configs.into_iter().map(Ok))
-        }.r#do().into_iter().map(|job_result| match job_result {
-            Ok(Ok(url)) => Ok(Ok(url)),
-            Ok(Err(e)) => Ok(Err(e.into())),
+        }.iter().map(|job_result| match job_result {
+            Ok(job) => match job.r#do() {
+                Ok(url) => Ok(Ok(url)),
+                Err(e) => Ok(Err(e.into()))
+            },
             Err(e) => Err(e.into())
         }).collect()
     }))
