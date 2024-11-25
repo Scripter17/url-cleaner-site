@@ -1,5 +1,7 @@
 /target
 *cache*
-hyperfine*
 sync.sh
 stdin
+*.out-*
+*.tar
+*.gz

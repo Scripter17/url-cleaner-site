@@ -61,44 +61,64 @@ async function clean_all_urls_on_page() {
 		// `elements.length` should never be `0` at this point.
 		// It shouldn't actually matter but if it happens it is an error.
 
-		let bulk_job = elements_to_bulk_job(elements);
-		// Fuck CORS. I get why it exists and I appreciate it but it is so annoying.
-		await GM_xmlhttpRequest({
-			url: `${window.URL_CLEANER_SITE}/clean`,
-			method: "POST",
-			data: JSON.stringify(bulk_job),
-			onload: function(response) {
-				let result = JSON.parse(response.responseText);
-				if (result.Err == null) {
-					result.Ok.urls.forEach(function (cleaning_result, index) {
-						if (cleaning_result.Err == null) {
-							if (cleaning_result.Ok.Err == null) {
-								if (elements[index].href != cleaning_result.Ok.Ok) {
-									elements[index].href = cleaning_result.Ok.Ok;
-									elements[index].setAttribute("url-cleaner", "success");
-								} else {
-									elements[index].setAttribute("url-cleaner", "unchanged");
-								}
-							} else {
-								console.error("URL Cleaner DoJobError:", cleaning_result, "Element indesx:", index, "Element:", elements[index], "Job:", bulk_job[index]);
-								elements[index].setAttribute("url-cleaner", "DoJobError");
-								elements[index].setAttribute("url-cleaner-error", JSON.stringify(cleaning_result.Ok.Err));
-								elements[index].style.color = "red";
-							}
-						} else {
-							console.error("URL Cleaner GetJobError:", cleaning_result, "Element indesx:", index, "Element:", elements[index], "Job:", bulk_job[index]);
-							elements[index].setAttribute("url-cleaner", "GetJobError");
-							elements[index].setAttribute("url-cleaner-error", JSON.stringify(cleaning_result.Err));
-							elements[index].style.color = "red";
-						}
-					})
-				} else {
-					console.error("URL Cleaner bulk job error", result);
-				}
-			}
-		});
+		await clean_elements(elements);
 	}
 	setTimeout(clean_all_urls_on_page, 500);
 }
+
+async function clean_elements(elements) {
+	let bulk_job = elements_to_bulk_job(elements);
+	// Fuck CORS. I get why it exists and I appreciate it but it is so annoying.
+	await GM_xmlhttpRequest({
+		url: `${window.URL_CLEANER_SITE}/clean`,
+		method: "POST",
+		data: JSON.stringify(bulk_job),
+		onload: function(response) {
+			let result = JSON.parse(response.responseText);
+			if (result.Err == null) {
+				result.Ok.urls.forEach(function (cleaning_result, index) {
+					if (cleaning_result.Err == null) {
+						if (cleaning_result.Ok.Err == null) {
+							if (elements[index].href != cleaning_result.Ok.Ok) {
+								elements[index].href = cleaning_result.Ok.Ok;
+								elements[index].setAttribute("url-cleaner", "success");
+							} else {
+								elements[index].setAttribute("url-cleaner", "unchanged");
+							}
+						} else {
+							console.error("URL Cleaner DoJobError:", cleaning_result, "Element indesx:", index, "Element:", elements[index], "Job:", bulk_job[index]);
+							elements[index].setAttribute("url-cleaner", "DoJobError");
+							elements[index].setAttribute("url-cleaner-error", JSON.stringify(cleaning_result.Ok.Err));
+							elements[index].style.color = "red";
+						}
+					} else {
+						console.error("URL Cleaner MakeJobError:", cleaning_result, "Element indesx:", index, "Element:", elements[index], "Job:", bulk_job[index]);
+						elements[index].setAttribute("url-cleaner", "MakeJobError");
+						elements[index].setAttribute("url-cleaner-error", JSON.stringify(cleaning_result.Err));
+						elements[index].style.color = "red";
+					}
+				})
+			} else {
+				console.error("URL Cleaner bulk job error", result);
+			}
+		}
+	});
+}
+
+new MutationObserver(function(mutations) {
+	mutations.forEach(async function(mutation) {
+		if (mutation.target.hasAttribute("url-cleaner")) {
+			mutation.target.removeAttribute("url-cleaner");
+			mutation.target.removeAttribute("url-cleaner-error");
+			if (mutation.target.matches(":hover, :active, :focus, :focus-visible, :focus-within")) {
+				await clean_elements([mutation.target]);
+			}
+		}
+	});
+}).observe(document.querySelector("html"), {
+	attributes: true,
+	attributeFilter: ["href"],
+	subtree: true
+});
 
 (async () => {await clean_all_urls_on_page()})();

@@ -28,10 +28,10 @@ and returns a response `Result<CleaningSuccess, CleaningError>` which is defined
 
 ```Rust
 pub struct CleaningSuccess {
-    pub urls: Vec<Result<Result<Url, StringDoJobError>, StringGetJobError>>
+    pub urls: Vec<Result<Result<Url, StringDoJobError>, StringMakeJobError>>
 }
 
-pub struct StringGetJobError {
+pub struct StringMakeJobError {
     pub message: String,
     pub variant: String
 }

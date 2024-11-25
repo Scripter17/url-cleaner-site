@@ -7,57 +7,58 @@ URLS=(\
 )
 NUMS=0,1,10,100,1000,10000
 
-rm -f hyperfine* callgrind*
+rm -f *.out-*
 
-no_compile=false
-json=false
-no_hyperfine=false
-print_desmos_lists=false
+compile=1
+hyperfine=1
+oha=1
 
 COMMAND="curl --json @- http://localhost:9149/clean -f"
 
 for arg in "$@"; do
   shift
   case "$arg" in
-    "--no-compile") no_compile=true ;;
-    "--no-hyperfine") no_hyperfine=true ;;
-    "--print-desmos-lists") print_desmos_lists=true ;;
+    "--no-compile") compile=0 ;;
+    "--no-hyperfine") hyperfine=0 ;;
+    "--no-oha") oha=0 ;;
     *) echo Unknwon option \"$arg\" && exit 1 ;;
   esac
 done
 
-if [ "$no_compile" == "false" ]; then cargo build -r; fi
+if [ $compile -eq 1 ]; then cargo build -r; fi
 
 if [ $? -ne 0 ]; then exit; fi
 
-for url in "${URLS[@]}"; do
-  echo IN: $url
-  echo OUT: $(curl --json "{\"urls\":[\"$url\"]}" http://localhost:9149/clean --silent | jq .urls[0].Ok -r)
-  file_safe_in_url=$(echo $url | head -c 50 | sed "s/\//-/g")
-  if [ "$no_hyperfine" == "false" ]; then
-    touch stdin
-    hyperfine\
-      -L url "$url"\
-      -L num $NUMS\
-      --prepare "bash -c \"yes '\\\"$url\\\"' | head -n {num} | head -c -1 | jq -rsc '{jobs:.}' > stdin\""\
-      --max-runs 100\
-      --warmup 20\
-      --input stdin\
-      -N\
-      "$COMMAND"\
-      --export-json "hyperfine-$file_safe_in_url.json"
-    if [ $? -ne 0 ]; then
-      echo Hyperfine failed
-      echo If it says the command exited with exit code 7, you probably aren\'t running URL Cleaner Site.
-      echo If it says the command exited with exit code 22, you probably need to raise URL Cleaner Site\'s size limit.
-      echo The size of the STDIN it failed with is $(cat stdin | wc -c) bytes.
-      if [ "$print_desmos_lists" == "true" ]; then
-        echo Desmos lists intentionally not printed.
-      fi
-    elif [ "$print_desmos_lists" == "true" ]; then
-      echo "N=[$NUMS]"
-      echo -n T= && cat "hyperfine-$file_safe_in_url.json" | jq "[.results[].mean]" -c
-    fi
-    rm stdin
-  fi
-done
+if [ $hyperfine -eq 1 ]; then
+  touch stdin
+  hyperfine \
+    -L num $(echo "${NUMS[@]}" | sed "s/ /,/g") \
+    -L url $(echo "${URLS[@]}" | sed "s/ /,/g") \
+    --prepare "bash -c \"yes '\\\"{url}\\\"' | head -n {num} | jq -sc '{urls: .}' > stdin\"" \
+    --max-runs 100 \
+    --warmup 20 \
+    --input stdin \
+    -N \
+    "$COMMAND" \
+    --sort command \
+    --export-json "hyperfine.out.json" \
+    --command-name ""
+  rm stdin
+  cat hyperfine.out.json |\
+    jq 'reduce .results[] as $result ({}; .[$result.parameters.url][$result.parameters.num] = ($result.mean * 1000000 | floor / 1000 | tonumber))' |\
+    sed -E ":a /^    .{0,7}\s\S/ s/:/: /g ; ta :b /^    .{,11}\./ s/:/: /g ; tb ; :c /^    .+\..{0,2}(,|$)/ s/,|$/0&/g ; tc" |\
+    tee hyperfine.out-summary.json |\
+    bat -pl json
+fi
+
+if [ $oha -eq 1 ]; then
+  for url in "${URLS[@]}"; do
+    host=$(echo "$url" | grep -oP "(?<=://)[\\w.:]+")
+    for num in ${NUMS//,/ }; do
+      echo -n "$host - $num - "
+      yes "\"$url\"" | head -n $num | jq -sc '{urls: .}' | oha http://127.0.0.1:9149/clean -m POST -D /dev/stdin -c 1 --json --no-tui | tee oha.out-$host-$num.json | jq '.summary.average'
+    done
+  done | tee >(sed 's/^/["/ ; s/ - /", "/g ; s/$/"]/' | jq -s 'reduce .[] as $result ({}; .[$result[0]][$result[1]] = ($result[2] | tonumber * 1000000 | floor / 1000))' | sed -E ":a /^    .{0,7}\s\S/ s/:/: /g ; ta :b /^    .{,11}\./ s/:/: /g ; tb ; :c /^    .+\..{0,2}(,|$)/ s/,|$/0&/g ; tc" | tee oha.out-summary.json | bat -pl json)
+fi
+
+tar -czf "benchmarks-$(date +%s).tar.gz" *.out*
