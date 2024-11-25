@@ -4,8 +4,8 @@ version = "0.6.2"
 edition = "2021"
 description = "A basic HTTP server and userscript to make using URL Cleaner in a browser easier."
 repository = "https://github.com/Scripter17/url-cleaner-site"
-keywords = ["url", "url-tracking", "privacy"]
-categories = ["url-cleaner"]
+keywords = ["url", "url-tracking", "privacy", "url-cleaner"]
+categories = []
 license = "AGPL-3.0-or-later"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
