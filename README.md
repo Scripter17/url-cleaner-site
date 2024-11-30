@@ -8,6 +8,16 @@ This particular example also has the side effect of possibly having `bit.ly` (or
 
 In the future, there will be a way to block/limit the `params_diff` field but, as its existence is extremely useful, it will not be removed by default.
 
+# Performance
+
+In practice, URL Cleaner Site and its userscript are far slower than "just" using URL Cleaner.
+
+This is both because each HTTP request, at least on my machine, takes 10ms regardless of content or work, and because the initial cleaning happens at a time where a LOT is happeneing.
+
+The initial clean often takes up to a full second and subsequent cleans can take up to 50ms.
+
+It's worth noting that, for me, Greasemonkey gives far better times than Tampermonkey. Like 50ms per subsequent cleans better. Tampermonkey should still work but if it's too slow for you you may want to test Greasemonkey.
+
 ## Details
 
 A basic HTTP server and userscript to allow automatically applying [URL Cleaner](https://github.com/Scripter17/url-cleaner) to every URL on every webpage you visit.
