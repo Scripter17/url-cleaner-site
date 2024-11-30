@@ -11,7 +11,7 @@ use url_cleaner::types::*;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BulkJob {
     /// The [`JobConfig`]s to use.
-    #[serde(alias = "urls", alias = "jobs", alias = "configs")]
+    #[serde(alias = "urls", alias = "jobs")]
     pub job_configs: Vec<JobConfig>,
     /// The [`ParamsDiff`] to use.
     #[serde(default)]

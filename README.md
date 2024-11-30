@@ -27,7 +27,7 @@ It binds to `127.0.0.1:9149` by default and `http://localhost:9149/clean` takes 
 ```Rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BulkJob {
-    #[serde(alias = "urls", alias = "configs")]
+    #[serde(alias = "urls", alias = "jobs")]
     pub job_configs: Vec<JobConfig>,
     #[serde(default)]
     pub params_diff: Option<ParamsDiff>
