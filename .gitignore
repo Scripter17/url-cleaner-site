@@ -2,6 +2,7 @@
 *cache*
 sync.sh
 stdin
-*.out-*
+*.out*
 *.tar
 *.gz
+tests.sh

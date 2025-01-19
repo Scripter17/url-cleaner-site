@@ -1,6 +1,6 @@
 [package]
 name = "url-cleaner-site"
-version = "0.6.2"
+version = "0.7.1"
 edition = "2021"
 description = "A basic HTTP server and userscript to make using URL Cleaner in a browser easier."
 repository = "https://github.com/Scripter17/url-cleaner-site"
@@ -11,38 +11,27 @@ license = "AGPL-3.0-or-later"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = "4.5.21"
-rocket = { version = "0.5.1", features = ["json"] }
-serde = "1.0.215"
-serde_json = "1.0.133"
-tokio = { version = "1.41.1", features = ["macros", "rt"] }
+clap = "4.5.26"
+rocket = { version = "0.5.1", features = ["json", "tls"] }
+serde = "1.0.217"
+serde_json = "1.0.136"
+tokio = { version = "1.43.0", features = ["macros", "rt"] }
 url = { version = "2.5.4", features = ["serde"] }
-url-cleaner = { version = "0.6.2", default-features = false }
+url-cleaner = { version = "0.7.1", default-features = false }
 
 [features]
 default = [
   "default-config",
-  "minify-included-strings",
-
   "regex",
-
   "glob",
-
   "commands",
-
   "http",
-  "advanced-http",
-
   "base64",
-
-  "cache",
-  "cache-redirects"
+  "cache"
 ]
 
 # Include default-config.json in the binary.
 default-config = ["url-cleaner/default-config"]
-# Replace all whitepace in the default config with just one space.
-minify-included-strings = ["url-cleaner/minify-included-strings"]
 
 # Enables [`url_cleaner::glue::RegexWrapper`].
 regex = ["url-cleaner/regex"]
@@ -52,14 +41,11 @@ glob = ["url-cleaner/glob"]
 
 # Enables HTTP stuff.
 http = ["url-cleaner/http"]
-# Enables [`types::RequestConfig`].
-advanced-http = ["url-cleaner/advanced-http"]
 
 # Enables caching various operations.
 cache = ["url-cleaner/cache"]
-# Read and write the result of [`url_cleaner::types::Mapper::ExpandShortLink`] from and to redirect-cache.txt.
-cache-redirects = ["url-cleaner/cache-redirects"]
 
+# Enables converting to and from base64.
 base64 = ["url-cleaner/base64"]
 
 # Adds `Custom` variants to the main tools which allow using function pointers.
@@ -73,10 +59,6 @@ commands = ["url-cleaner/commands"]
 # Wrapping specific items in their own Debug variants gives much more detail, but this can show you where to wrap stuff.
 # The exact effects of this feature are currently unspecified, not covered in any stability guarantees, and should not be parsed unless you're willing to rewrite the parser at stupid times for stupider reasons.
 debug = ["url-cleaner/debug"]
-
-# Print various timing info.
-# The exact effects of this feature are currently unspecified, not covered in any stability guarantees, and should not be parsed unless you're willing to rewrite the parser at stupid times for stupider reasons.
-debug-time = ["url-cleaner/debug-time"]
 
 [lints.rust]
 missing_docs = "warn"

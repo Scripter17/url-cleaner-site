@@ -12,7 +12,7 @@ use url_cleaner::types::*;
 pub struct BulkJob {
     /// The [`JobConfig`]s to use.
     #[serde(alias = "urls", alias = "jobs")]
-    pub job_configs: Vec<JobConfig>,
+    pub job_configs: Vec<serde_json::Value>,
     /// The [`ParamsDiff`] to use.
     #[serde(default)]
     pub params_diff: Option<ParamsDiff>

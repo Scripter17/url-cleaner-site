@@ -6,14 +6,14 @@ use std::sync::OnceLock;
 use std::fs::read_to_string;
 use std::str::FromStr;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::sync::Mutex;
 
 #[macro_use] extern crate rocket;
 use rocket::serde::json::Json;
 use rocket::http::Status;
 use rocket::Request;
 use rocket::data::Limits;
-use clap::Parser;
+use clap::{Parser, CommandFactory};
 
 use url_cleaner::types::*;
 use url_cleaner::glue::*;
@@ -52,49 +52,13 @@ struct Args {
     #[arg(long, default_value = DEFAULT_BIND_IP, aliases = ["ip", "address"])] bind: IpAddr,
     /// The port to listen to.
     #[arg(long, default_value_t = DEFAULT_PORT)] port: u16,
-    /// Set flags.
-    #[arg(short      , long, value_names = ["NAME"])]
-    pub flag  : Vec<String>,
-    /// Unset flags set by the config.
-    #[arg(short = 'F', long, value_names = ["NAME"])]
-    pub unflag: Vec<String>,
-    /// For each occurrence of this option, its first argument is the variable name and the second argument is its value.
-    #[arg(short      , long, num_args(2), value_names = ["NAME", "VALUE"])]
-    pub var: Vec<Vec<String>>,
-    /// Unset variables set by the config.
-    #[arg(short = 'V', long, value_names = ["NAME"])]
-    pub unvar : Vec<String>,
-    /// For each occurrence of this option, its first argument is the set name and subsequent arguments are the values to insert.
-    #[arg(             long, num_args(2..), value_names = ["NAME", "VALUE"])]
-    pub insert_into_set: Vec<Vec<String>>,
-    /// For each occurrence of this option, its first argument is the set name and subsequent arguments are the values to remove.
-    #[arg(             long, num_args(2..), value_names = ["NAME", "VALUE"])]
-    pub remove_from_set: Vec<Vec<String>>,
-    /// For each occurrence of this option, its first argument is the map name, the second is the map key, and subsequent arguments are the values to insert.
-    #[arg(             long, num_args(3..), value_names = ["NAME", "KEY1", "VALUE1"])]
-    pub insert_into_map: Vec<Vec<String>>,
-    /// For each occurrence of this option, its first argument is the map name, the second is the map key, and subsequent arguments are the values to remove.
-    #[arg(             long, num_args(2..), value_names = ["NAME", "KEY1"])]
-    pub remove_from_map: Vec<Vec<String>>,
     /// Overrides the config's [`Config::cache_path`].
     #[arg(             long)]
-    pub cache_path: Option<String>,
-    /// Read stuff from caches. Default value is controlled by the config. Omitting a value means true.
     #[cfg(feature = "cache")]
-    #[arg(             long, num_args(0..=1), default_missing_value("true"))]
-    pub read_cache : Option<bool>,
-    /// Write stuff to caches. Default value is controlled by the config. Omitting a value means true.
-    #[cfg(feature = "cache")]
-    #[arg(             long, num_args(0..=1), default_missing_value("true"))]
-    pub write_cache: Option<bool>,
-    /// The proxy to use. Example: socks5://localhost:9150
-    #[cfg(feature = "http")]
-    #[arg(             long)]
-    pub proxy: Option<ProxyConfig>,
-    /// Disables all HTTP proxying.
-    #[cfg(feature = "http")]
-    #[arg(             long, num_args(0..=1), default_missing_value("true"))]
-    pub no_proxy: Option<bool>,
+    pub cache_path: Option<CachePath>,
+    /// Stuff to make a [`ParamsDiff`] from the CLI.
+    #[command(flatten)]
+    pub params_diff_args: ParamsDiffArgParser,
     /// Print the parsed arguments for debugging.
     /// When this, any other `--print-...` flag, or `--test-config` is set, no URLs are cleaned.
     #[arg(             long, verbatim_doc_comment)]
@@ -118,18 +82,33 @@ struct Args {
     /// Run the config's tests.
     /// When this or any `--print-...` flag is set, no URLs are cleaned.
     #[arg(             long, verbatim_doc_comment)]
-    pub test_config : bool
+    pub test_config : bool,
+    /// Amount of threads to process jobs in.
+    /// 
+    /// Zero gets the current CPU threads.
+    #[arg(long, default_value_t = 0)]
+    pub threads: usize,
+    /// The (optional) TLS/HTTPS cert. If specified, requires `--key`.
+    #[arg(long, requires = "key")]
+    pub cert: Option<PathBuf>,
+    /// The (optional) TLS/HTTPS key. If specified, requires `--cert`.
+    #[arg(long, requires = "cert")]
+    pub key: Option<PathBuf>
 }
 
 /// The [`Config`] to use as a [`String`].
-static CONFIG_STRING: OnceLock<String>                 = OnceLock::new();
+static CONFIG_STRING : OnceLock<String>                 = OnceLock::new();
 /// The [`Config`] to use.
-static CONFIG       : OnceLock<Config>                 = OnceLock::new();
+static CONFIG        : OnceLock<Config>                 = OnceLock::new();
 /// The max size of a payload to the [`clean`] route.
-static MAX_JSON_SIZE: OnceLock<rocket::data::ByteUnit> = OnceLock::new();
+static MAX_JSON_SIZE : OnceLock<rocket::data::ByteUnit> = OnceLock::new();
 /// The [`Cache`] to use.
 #[cfg(feature = "cache")]
-static CACHE        : OnceLock<Cache>                  = OnceLock::new();
+static CACHE         : OnceLock<Cache>                  = OnceLock::new();
+/// The number of job threads to use.
+static THREADS       : OnceLock<usize>                  = OnceLock::new();
+/// The number of [`BulkJob`]s handled. Used for naming threads.
+static BULK_JOB_COUNT: Mutex<usize>                     = Mutex::new(0);
 
 /// Make the server.
 #[launch]
@@ -141,45 +120,15 @@ async fn rocket() -> _ {
     #[cfg(not(feature = "default-config"))]
     CONFIG_STRING.set(read_to_string(&args.config).expect("Reading the Config file to a string to not error.")).expect("The CONFIG_STRING global static to have not been set.");
     let mut config: Config = serde_json::from_str(CONFIG_STRING.get().expect("The CONFIG_STRING global static to have just been set.")).expect("The CONFIG_STRING to be a valid Config.");
-    let mut params_diffs = args.params_diff
+    let mut params_diffs: Vec<ParamsDiff> = args.params_diff
         .into_iter()
         .map(|path| serde_json::from_str(&std::fs::read_to_string(path).expect("Reading the ParamsDiff file to a string to not error.")).expect("The read ParamsDiff file to be a valid ParamsDiff."))
         .collect::<Vec<_>>();
-    #[allow(unused_mut, reason = "Attributes on expressions WHEN. PLEASE.")]
-    let mut feature_flag_make_params_diff = false;
-    #[cfg(feature = "cache")] #[allow(clippy::unnecessary_operation, reason = "False positive.")] {feature_flag_make_params_diff = feature_flag_make_params_diff || args.read_cache.is_some()};
-    #[cfg(feature = "cache")] #[allow(clippy::unnecessary_operation, reason = "False positive.")] {feature_flag_make_params_diff = feature_flag_make_params_diff || args.write_cache.is_some()};
-    #[cfg(feature = "http" )] #[allow(clippy::unnecessary_operation, reason = "False positive.")] {feature_flag_make_params_diff = feature_flag_make_params_diff || args.proxy.is_some()};
-    if !args.flag.is_empty() || !args.unflag.is_empty() || !args.var.is_empty() || !args.unvar.is_empty() || !args.insert_into_set.is_empty() || !args.remove_from_set.is_empty() || !args.insert_into_map.is_empty() || !args.remove_from_map.is_empty() || feature_flag_make_params_diff {
-        params_diffs.push(ParamsDiff {
-            flags  : args.flag  .into_iter().collect(), // `impl<X: IntoIterator, Y: FromIterator<<X as IntoIterator>::Item>> From<X> for Y`?
-            unflags: args.unflag.into_iter().collect(), // It's probably not a good thing to do a global impl for,
-            vars   : args.var   .into_iter().map(|x| x.try_into().expect("Clap guarantees the length is always 2")).map(|[name, value]: [String; 2]| (name, value)).collect(), // Either let me TryFrom a Vec into a tuple or let me collect a [T; 2] into a HashMap. Preferably both.
-            unvars : args.unvar .into_iter().collect(), // but surely once specialization lands in Rust 2150 it'll be fine?
-            init_sets: Default::default(),
-            insert_into_sets: args.insert_into_set.into_iter().map(|mut x| (x.swap_remove(0), x)).collect(),
-            remove_from_sets: args.remove_from_set.into_iter().map(|mut x| (x.swap_remove(0), x)).collect(),
-            delete_sets     : Default::default(),
-            init_maps       : Default::default(),
-            insert_into_maps: args.insert_into_map.into_iter().map(|x| {
-                let mut values = HashMap::new();
-                let mut args_iter = x.into_iter();
-                let map = args_iter.next().expect("The validation to have worked.");
-                while let Some(k) = args_iter.next() {
-                    values.insert(k, args_iter.next().expect("The validation to have worked."));
-                }
-                (map, values)
-            }).collect::<HashMap<_, _>>(),
-            remove_from_maps: args.remove_from_map.into_iter().map(|mut x| (x.swap_remove(0), x)).collect::<HashMap<_, _>>(),
-            delete_maps     : Default::default(),
-            #[cfg(feature = "cache")] read_cache : args.read_cache,
-            #[cfg(feature = "cache")] write_cache: args.write_cache,
-            #[cfg(feature = "http")] http_client_config_diff: Some(HttpClientConfigDiff {
-                set_proxies: args.proxy.map(|x| vec![x]),
-                no_proxy: args.no_proxy,
-                ..HttpClientConfigDiff::default()
-            })
-        });
+    if args.params_diff_args.does_anything() {
+        match args.params_diff_args.try_into() {
+            Ok(params_diff) => params_diffs.push(params_diff),
+            Err(e) => Args::command().error(clap::error::ErrorKind::WrongNumberOfValues, e.as_str()).exit()
+        }
     }
 
     for params_diff in params_diffs {
@@ -187,14 +136,19 @@ async fn rocket() -> _ {
     }
 
     #[cfg(feature = "cache")]
-    CACHE.set(args.cache_path.as_deref().unwrap_or(&*config.cache_path).into()).expect("The CACHE global static have not been already set.");
+    CACHE.set(args.cache_path.as_ref().unwrap_or(&config.cache_path).clone().into()).expect("The CACHE global static have not been already set.");
     CONFIG.set(config).expect("The CONFIG global static to have not been already set.");
     MAX_JSON_SIZE.set(args.max_size).expect("The MAX_JSON_SIZE global static to have not been already set.");
+
+    let mut threads = args.threads;
+    if threads == 0 {threads = std::thread::available_parallelism().expect("To be able to get the available parallelism.").into();}
+    THREADS.set(threads).expect("The THREADS global static to have not been already set.");
 
     rocket::custom(rocket::Config {
         address: args.bind,
         port: args.port,
         limits: Limits::default().limit("json", args.max_size),
+        tls: args.cert.into_iter().zip(args.key).map(|(cert, key)| rocket::config::TlsConfig::from_paths(cert, key)).next(), // No unwraps.
         ..rocket::Config::default()
     })
         .mount("/", routes![index])
@@ -231,19 +185,72 @@ async fn clean(bulk_job: Json<BulkJob>) -> Json<Result<CleaningSuccess, ()>> {
     if let Some(params_diff) = bulk_job.params_diff {
         params_diff.apply(&mut config.to_mut().params);
     }
+
+    let jobs_config = JobsConfig {
+        config,
+        #[cfg(feature = "cache")]
+        cache: CACHE.get().expect("The CACHE global static to have been set.").clone()
+    };
+    let jobs_config_ref = &jobs_config;
+
+    let threads = *THREADS.get().expect("The THREADS global static to have been set.");
+    let (in_senders , in_recievers ) = (0..threads).map(|_| std::sync::mpsc::channel::<serde_json::Value>()).collect::<(Vec<_>, Vec<_>)>();
+    let (out_senders, out_recievers) = (0..threads).map(|_| std::sync::mpsc::channel::<Result<Result<url::Url, DoJobError>, MakeJobError>>()).collect::<(Vec<_>, Vec<_>)>();
+
+    let ret_urls = std::sync::Mutex::new(Vec::with_capacity(bulk_job.job_configs.len()));
+    let ret_urls_ref = &ret_urls;
+
+    let mut temp = BULK_JOB_COUNT.lock().expect("No panics.");
+    let id = *temp;
+    #[allow(clippy::arithmetic_side_effects, reason = "Not gonna happen.")]
+    {*temp += 1;}
+    drop(temp);
+
+    std::thread::scope(|s| {
+        std::thread::Builder::new().name(format!("({id}) Job collector")).spawn_scoped(s, move || {
+            for (i, job_value) in bulk_job.job_configs.into_iter().enumerate() {
+                #[allow(clippy::arithmetic_side_effects, reason = "`threads` is never zero, and if it is this panicking is an entirely reasonable response.")]
+                in_senders.get(i % threads).expect("The amount of senders to not exceed the count of senders to make.").send(job_value).expect("To successfuly send the Job.");
+            }
+        }).expect("Spawning a thread to work fine.");
+        
+        in_recievers.into_iter().zip(out_senders).enumerate().map(|(i, (ir, os))| {
+            std::thread::Builder::new().name(format!("({id}) Worker {i}")).spawn_scoped(s, move || {
+                while let Ok(lazy_job_config) = ir.recv() {
+                    os.send(serde_json::from_value::<JobConfig>(lazy_job_config)
+                        .map(|job_config| jobs_config_ref.with_job_config(job_config).r#do())
+                        .map_err(|e| MakeJobError::MakeJobConfigError(MakeJobConfigError::SerdeJsonError(e)))
+                    ).expect("The receiver to still exist.");
+                }
+            }).expect("Spawning a thread to work fine.");
+        }).for_each(drop);
+
+        std::thread::Builder::new().name(format!("({id}) Job returner")).spawn_scoped(s, move || {
+            let mut ret_urls_handle = ret_urls_ref.lock().expect("No panics.");
+            
+            let mut disconnected = 0usize;
+            for or in out_recievers.iter().cycle() {
+                let recieved = or.recv();
+                match recieved {
+                    Ok(x) => {
+                        ret_urls_handle.push(match x {
+                            Ok(Ok(url)) => Ok(Ok(url)),
+                            Ok(Err(e))  => Ok(Err(e.into())),
+                            Err(e)      => Err(e.into())
+                        })
+                    }
+                    Err(_) => {
+                        #[allow(clippy::arithmetic_side_effects, reason = "Can't happen.")]
+                        {disconnected += 1;}
+                        if disconnected == threads {break;}
+                    }
+                }
+            }
+        }).expect("Spawning a thread to work fine.");
+    });
+
     Json(Ok(CleaningSuccess {
-        urls: Jobs {
-            config,
-            #[cfg(feature = "cache")]
-            cache: CACHE.get().expect("The CACHE global static to have been set.").clone(), // It's a newtype around an Arc, so cloning is O(1).
-            job_configs_source: Box::new(bulk_job.job_configs.into_iter().map(Ok))
-        }.iter().map(|job_result| match job_result {
-            Ok(job) => match job.r#do() {
-                Ok(url) => Ok(Ok(url)),
-                Err(e) => Ok(Err(e.into()))
-            },
-            Err(e) => Err(e.into())
-        }).collect()
+        urls: ret_urls.into_inner().expect("No panics.")
     }))
 }
 
