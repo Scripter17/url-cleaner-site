@@ -28,10 +28,13 @@ To understand the privacy concerns, performance, and other specifics common to b
 It binds to `127.0.0.1:9149` by default and `http://localhost:9149/clean` takes a JSON "BulkJob" (better name pending) of the following form:
 
 ```Rust
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BulkJob {
-    #[serde(alias = "urls", alias = "jobs")]
-    pub job_configs: Vec<serde_json::Value>, // Allows making JobConfigs in parallel; Accepts the same object/string representations as normal.
+    /// The [`JobConfig`]s to use.
+    pub jobs: Vec<serde_json::Value>,
+    /// The [`JobsContext`] to use.
+    #[serde(default)]
+    pub context: JobsContext,
+    /// The [`ParamsDiff`] to use.
     #[serde(default)]
     pub params_diff: Option<ParamsDiff>
 }
@@ -61,7 +64,7 @@ pub struct CleaningError {
 ```
 
 It is intended to be byte-for-byte identical to the equivalent invocation of URL Cleaner in JSON mode.  
-As part of this (and also as a consequence of a performance thing), if one of the jobs are invalid (for example, null), the other jobs will still work.
+As part of this (and also as a consequence of a performance thing), if some of the jobs are invalid (for example, null), the other jobs will still work.
 
 ## TLS/HTTPS
 
@@ -71,7 +74,7 @@ For FireFox, where this is unreasonably difficult, simply opening `https://local
 
 Please note that this requires changing `window.URL_CLEANER_SITE = "http://localhost:9149";` in the userscript to https.
 
-Currently there is no "canon" port for HTTPS URL Cleaner Site, as 9150 is already taken by Tor. Due to the relative unexpectedness of people hosting public URL Cleaner instances, this is considered a non-issue.
+Currently the default port of 9149 applies to both HTTP and HTTPS servers.
 
 ## Performance
 
@@ -79,40 +82,38 @@ Due to the overhead of using HTTP, getting all the jobs before running them, and
 
 On the same laptop used in URL Cleaner's example benchmarks and with TLS, hyperfine (using CURL) gave me the following benchmarks:
 
+Without TLS, the benchmarks are about 15ms faster, but the worst case scenario is provided because it's more useful.
+
 ```Json
 {
   "https://x.com?a=2": {
-    "0":      24.932,
-    "1":      24.980,
-    "10":     24.925,
-    "100":    25.360,
-    "1000":   29.714,
-    "10000":  69.333
+    "0"    : 25.878,
+    "1"    : 25.634,
+    "10"   : 25.848,
+    "100"  : 26.034,
+    "1000" : 29.266,
+    "10000": 58.166
   },
   "https://example.com?fb_action_ids&mc_eid&ml_subscriber_hash&oft_ck&s_cid&unicorn_click_id": {
-    "0":      25.130,
-    "1":      25.107,
-    "10":     25.321,
-    "100":    25.621,
-    "1000":   32.174,
-    "10000":  87.477
+    "0"    : 25.813,
+    "1"    : 25.799,
+    "10"   : 25.663,
+    "100"  : 26.162,
+    "1000" : 31.286,
+    "10000": 73.817
   },
   "https://www.amazon.ca/UGREEN-Charger-Compact-Adapter-MacBook/dp/B0C6DX66TN/ref=sr_1_5?crid=2CNEQ7A6QR5NM&keywords=ugreen&qid=1704364659&sprefix=ugreen%2Caps%2C139&sr=8-5&ufe=app_do%3Aamzn1.fos.b06bdbbe-20fd-4ebc-88cf-fa04f1ca0da8": {
-    "0":      24.871,
-    "1":      24.958,
-    "10":     24.929,
-    "100":    26.146,
-    "1000":   36.087,
-    "10000": 128.855
+    "0"    : 25.657,
+    "1"    : 26.030,
+    "10"   : 25.618,
+    "100"  : 26.695,
+    "1000" : 33.633,
+    "10000": 98.979
   }
 }
 ```
 
-Using the (currently still experimental) parallelization feature gives about the same speedup as it does in normal URL Cleaner.  
-For me it's about 40ms faster for 10k of the amazon URL.
-
-If you're using FireFox, you should know that Greasemonkey gives much better performance of the userscript than Tampermonkey.  
-Both should always work, but GM bottoms out at 10ms per request whereas TM takes 50ms per request.
+If you're using FireFox, you should know that Greasemonkey gives me much better performance of the userscript than Tampermonkey.  
 
 As for the performance of the userscript itself... I honestly can't say. Nothing strikes me as particularly bad in terms of either CPU or memory usage, but I haven't seriously used javascript in years.  
-It probably has a very slow memory leak that would be caused by a long-running webpage session having billions of elements, but that's very unlikely to ever happen outside testing.
+It probably has a very slow memory leak that would be a problem when on a long-running webpage session having billions of elements, but that's very unlikely to ever happen outside testing.
