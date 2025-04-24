@@ -1,70 +1,10 @@
 # URL Cleaner Site
 
-A basic but fully featured HTTP frontend and userscript for URL Cleaner.
+A simple HTTP server to allow using [URL Cleaner](https://github.com/Scripter17/url-cleaner), in web browser userscripts and other applications where SSH tunnels are infeasable.
 
-# /!\\ THIS IS NOT HARDENED AGAINST MALICIOUS INPUT /!\\
+# /!\ PLEASE SEE [URL Cleaner](https://github.com/Scripter17/url-cleaner)'s DOCS FOR KNWON PRIVACY CONCERNS. /!\'
 
-Running URL Cleaner Site outside of localhost and without a firewall is a very bad idea.
-
-Users can make your computer do various bad things, including but not limited to:
-
-- Send thousands of HTTP requests to a website like bit.ly by setting `"params_diff": {"read_cache": false}`, interfering with normal usage and possibly getting you some annoying IP bans/letters from your ISP.
-- Consume arbitrary CPU resources by crafting expensive to clean URLs.
-- If they control a website URL Cleaner Site is configured to send HTTP requests to, deanonymize you behind a proxy/onionsite. (Assuming you're not using a proxy for HTTP requests, which you probably should be.)
-
-By default, this is not a concern because URL Cleaner Site only binds to localhost, which doesn't allow external traffic.  
-But if you want to let your other devices to use the same server, you should configure DHCP and your firewall to allow ONLY trusted devices.
-
-In the future, defences may be implemented for some or all of the above concerns, but you should never consider the above list exhaustive or the defences infallible.
-
-# Details
-
-A basic HTTP server and userscript to allow automatically applying [URL Cleaner](https://github.com/Scripter17/url-cleaner) to every URL on every webpage you visit.
-
-To understand the privacy concerns, performance, and other specifics common to both URL Cleaner and URL Cleaner Site, please check URL Cleaner's README.
-
-## API
-
-It binds to `127.0.0.1:9149` by default and `http://localhost:9149/clean` takes a JSON "BulkJob" (better name pending) of the following form:
-
-```Rust
-pub struct BulkJob {
-    /// The [`JobConfig`]s to use.
-    pub jobs: Vec<serde_json::Value>,
-    /// The [`JobsContext`] to use.
-    #[serde(default)]
-    pub context: JobsContext,
-    /// The [`ParamsDiff`] to use.
-    #[serde(default)]
-    pub params_diff: Option<ParamsDiff>
-}
-```
-
-and returns a JSON response `Result<CleaningSuccess, CleaningError>` which is defined as
-
-```Rust
-pub struct CleaningSuccess {
-    pub urls: Vec<Result<Result<Url, StringDoJobError>, StringMakeJobError>>
-}
-
-pub struct StringMakeJobError {
-    pub message: String,
-    pub variant: String
-}
-
-pub struct StringDoJobError {
-    pub message: String,
-    pub variant: String
-}
-
-pub struct CleaningError {
-    pub status: u16,
-    pub reason: Option<&'static str>
-}
-```
-
-It is intended to be byte-for-byte identical to the equivalent invocation of URL Cleaner in JSON mode.  
-As part of this (and also as a consequence of a performance thing), if some of the jobs are invalid (for example, null), the other jobs will still work.
+URL Cleaner and URL Cleaner Site are under very active development and there are many non-obvious privacy concerns that may or may not be important to you.
 
 ## TLS/HTTPS
 
@@ -84,31 +24,33 @@ On the same laptop used in URL Cleaner's example benchmarks and with TLS, hyperf
 
 Without TLS, the benchmarks are about 15ms faster, but the worst case scenario is provided because it's more useful.
 
+Last updated 2025-04-23.
+
 ```Json
 {
   "https://x.com?a=2": {
-    "0"    : 25.878,
-    "1"    : 25.634,
-    "10"   : 25.848,
-    "100"  : 26.034,
-    "1000" : 29.266,
-    "10000": 58.166
+    "0"    :  26.413,
+    "1"    :  28.502,
+    "10"   :  26.480,
+    "100"  :  26.371,
+    "1000" :  30.198,
+    "10000":  61.400
   },
   "https://example.com?fb_action_ids&mc_eid&ml_subscriber_hash&oft_ck&s_cid&unicorn_click_id": {
-    "0"    : 25.813,
-    "1"    : 25.799,
-    "10"   : 25.663,
-    "100"  : 26.162,
-    "1000" : 31.286,
-    "10000": 73.817
+    "0"    :  26.247,
+    "1"    :  26.339,
+    "10"   :  26.288,
+    "100"  :  26.655,
+    "1000" :  32.473,
+    "10000":  80.217
   },
   "https://www.amazon.ca/UGREEN-Charger-Compact-Adapter-MacBook/dp/B0C6DX66TN/ref=sr_1_5?crid=2CNEQ7A6QR5NM&keywords=ugreen&qid=1704364659&sprefix=ugreen%2Caps%2C139&sr=8-5&ufe=app_do%3Aamzn1.fos.b06bdbbe-20fd-4ebc-88cf-fa04f1ca0da8": {
-    "0"    : 25.657,
-    "1"    : 26.030,
-    "10"   : 25.618,
-    "100"  : 26.695,
-    "1000" : 33.633,
-    "10000": 98.979
+    "0"    :  26.475,
+    "1"    :  26.390,
+    "10"   :  26.175,
+    "100"  :  27.682,
+    "1000" :  36.432,
+    "10000": 113.727
   }
 }
 ```

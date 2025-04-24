@@ -60,7 +60,7 @@ struct Args {
     /// Stuff to make a [`ParamsDiff`] from the CLI.
     #[command(flatten)]
     pub params_diff_args: ParamsDiffArgParser,
-    /// Amount of threads to process jobs in.
+    /// Amount of threads to process tasks in.
     /// 
     /// Zero gets the current CPU threads.
     #[arg(long, default_value_t = 0)]
@@ -75,9 +75,11 @@ struct Args {
 
 /// The config for the server.
 #[derive(Debug)]
-pub struct ServerConfig<'a> {
-    /// The [`JobsConfig`] to use.
-    pub jobs_config: JobsConfig<'a>,
+pub struct ServerConfig {
+    /// The [`Config`] to use.
+    pub config: Config,
+    /// The [`Cache`] to use.
+    pub cache: Cache,
     /// The config to use as a [`String`].
     pub config_string: String,
     /// The number of threads to spawn for each [`BulkJob`].
@@ -88,11 +90,11 @@ pub struct ServerConfig<'a> {
 
 /// The state of the server.
 #[derive(Debug)]
-pub struct ServerState<'a> {
+pub struct ServerState {
     /// The [`ServerConfig`] to use.
-    pub config: ServerConfig<'a>,
+    pub config: ServerConfig,
     /// The number of [`BulkJob`]s handled. Used for naming threads.
-    pub bulk_jobs_count: Mutex<usize>,
+    pub job_count: Mutex<usize>,
 }
 
 /// Make the server.
@@ -122,16 +124,14 @@ async fn rocket() -> _ {
 
     let server_state = ServerState {
         config: ServerConfig {
-            jobs_config: JobsConfig {
-                #[cfg(feature = "cache")]
-                cache: args.cache_path.as_ref().unwrap_or(&config.cache_path).clone().into(),
-                config: Cow::Owned(config)
-            },
+            #[cfg(feature = "cache")]
+            cache: args.cache_path.as_ref().unwrap_or(&config.cache_path).clone().into(),
+            config,
             config_string,
             threads: NonZero::new(args.threads).unwrap_or_else(|| std::thread::available_parallelism().expect("To be able to get the available parallelism.")),
             max_json_size: args.max_size
         },
-        bulk_jobs_count: Mutex::new(0)
+        job_count: Mutex::new(0)
     };
 
     rocket::custom(rocket::Config {
@@ -165,71 +165,69 @@ The modified source code of URL Cleaner (if applicable):"#
 
 /// The `/get-config` route.
 #[get("/")]
-async fn get_config<'a>(state: &'a State<ServerState<'_>>) -> &'a str {
+async fn get_config(state: &State<ServerState>) -> &str {
     &state.config.config_string
 }
 
 /// The `/clean` route.
 #[post("/", data="<bulk_job>")]
-async fn clean(state: &State<ServerState<'_>>, bulk_job: Json<BulkJob>) -> Json<Result<CleaningSuccess, ()>> {
+async fn clean(state: &State<ServerState>, bulk_job: Json<BulkJob>) -> Json<Result<CleaningSuccess, ()>> {
     let bulk_job = bulk_job.0;
-    let mut jobs_config = Cow::Borrowed(&state.config.jobs_config);
+
+    let mut config = Cow::Borrowed(&state.config.config);
     if let Some(params_diff) = bulk_job.params_diff {
-        params_diff.apply(&mut jobs_config.to_mut().config.to_mut().params);
+        params_diff.apply(&mut config.to_mut().params);
     }
-    let jobs_config_ref = &jobs_config;
-    let jobs_context_ref = &bulk_job.context;
 
-    let (in_senders , in_recievers ) = (0..state.config.threads.get()).map(|_| std::sync::mpsc::channel::<serde_json::Value>()).collect::<(Vec<_>, Vec<_>)>();
-    let (out_senders, out_recievers) = (0..state.config.threads.get()).map(|_| std::sync::mpsc::channel::<Result<Result<url::Url, DoJobError>, MakeJobError>>()).collect::<(Vec<_>, Vec<_>)>();
+    let (in_senders , in_recievers ) = (0..state.config.threads.get()).map(|_| std::sync::mpsc::channel::<Result<LazyTask<'_>, MakeLazyTaskError>>()).collect::<(Vec<_>, Vec<_>)>();
+    let (out_senders, out_recievers) = (0..state.config.threads.get()).map(|_| std::sync::mpsc::channel::<Result<BetterUrl, DoTaskError>>()).collect::<(Vec<_>, Vec<_>)>();
 
-    let ret_urls = std::sync::Mutex::new(Vec::with_capacity(bulk_job.jobs.len()));
+    let ret_urls = std::sync::Mutex::new(Vec::with_capacity(bulk_job.tasks.len()));
     let ret_urls_ref = &ret_urls;
 
-    let mut temp = state.bulk_jobs_count.lock().expect("No panics.");
+    let mut temp = state.job_count.lock().expect("No panics.");
     let id = *temp;
     #[allow(clippy::arithmetic_side_effects, reason = "Not gonna happen.")]
     {*temp += 1;}
     drop(temp);
 
     std::thread::scope(|s| {
-        std::thread::Builder::new().name(format!("({id}) Job collector")).spawn_scoped(s, move || {
-            for (i, job_value) in bulk_job.jobs.into_iter().enumerate() {
+        std::thread::Builder::new().name(format!("({id}) Task collector")).spawn_scoped(s, || {
+            let job = Job {
+                context: &bulk_job.context,
+                config: &config,
+                cache: &state.config.cache,
+                lazy_task_configs: Box::new(bulk_job.tasks.into_iter().map(Ok))
+            };
+            for (in_sender, maybe_task_source) in in_senders.into_iter().cycle().zip(job) {
                 #[allow(clippy::arithmetic_side_effects, reason = "`threads` is never zero, and if it is this panicking is an entirely reasonable response.")]
-                in_senders.get(i % state.config.threads).expect("The amount of senders to not exceed the count of senders to make.").send(job_value).expect("To successfuly send the Job.");
+                in_sender.send(maybe_task_source).expect("To successfuly send the LazyTask.");
             }
         }).expect("Spawning a thread to work fine.");
 
         in_recievers.into_iter().zip(out_senders).enumerate().map(|(i, (ir, os))| {
             std::thread::Builder::new().name(format!("({id}) Worker {i}")).spawn_scoped(s, move || {
-                while let Ok(lazy_job_config) = ir.recv() {
-                    os.send(serde_json::from_value::<JobConfig>(lazy_job_config)
-                        .map(|job_config| jobs_config_ref.new_job(job_config, jobs_context_ref).r#do())
-                        .map_err(|e| MakeJobError::MakeJobConfigError(MakeJobConfigError::SerdeJsonError(e)))
-                    ).expect("The receiver to still exist.");
+                while let Ok(maybe_task_source) = ir.recv() {
+                    let ret = match maybe_task_source {
+                        Ok(task_source) => match task_source.make() {
+                            Ok(task) => task.r#do(),
+                            Err(e) => Err(e.into())
+                        },
+                        Err(e) => Err(DoTaskError::MakeTaskError(e.into()))
+                    };
+
+                    os.send(ret).expect("The out receiver to still exist.");
                 }
             }).expect("Spawning a thread to work fine.");
         }).for_each(drop);
 
-        std::thread::Builder::new().name(format!("({id}) Job returner")).spawn_scoped(s, move || {
+        std::thread::Builder::new().name(format!("({id}) Task returner")).spawn_scoped(s, move || {
             let mut ret_urls_handle = ret_urls_ref.lock().expect("No panics.");
 
-            let mut disconnected = 0usize;
             for or in out_recievers.iter().cycle() {
-                let recieved = or.recv();
-                match recieved {
-                    Ok(x) => {
-                        ret_urls_handle.push(match x {
-                            Ok(Ok(url)) => Ok(Ok(url)),
-                            Ok(Err(e))  => Ok(Err(e.into())),
-                            Err(e)      => Err(e.into())
-                        })
-                    }
-                    Err(_) => {
-                        #[allow(clippy::arithmetic_side_effects, reason = "Can't happen.")]
-                        {disconnected += 1;}
-                        if disconnected == state.config.threads.get() {break;}
-                    }
+                match or.recv() {
+                    Ok(x) => ret_urls_handle.push(x.map_err(|e| e.to_string())),
+                    Err(_) => break
                 }
             }
         }).expect("Spawning a thread to work fine.");
@@ -251,7 +249,7 @@ async fn clean_error(status: Status, _request: &Request<'_>) -> Json<Result<(), 
 
 /// The `get-max-json-size` route.
 #[get("/")]
-async fn get_max_json_size(state: &State<ServerState<'_>>) -> String {
+async fn get_max_json_size(state: &State<ServerState>) -> String {
     state.config.max_json_size.as_u64().to_string()
 }
 

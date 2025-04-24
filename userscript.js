@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         URL Cleaner
 // @copyright    AGPL-3.0-or-later
-// @version      0.8.0
+// @version      0.9.0
 // @description  The userscript that comes with URL Cleaner Site.
 // @author       Scripter17@Github.com
 // @match        https://*/*
@@ -10,21 +10,27 @@
 // @connect      localhost
 // @grant        GM.setValue
 // @grant        GM.getValue
+// @grant        GM.listValues
+// @grant        GM.deleteValue
 // ==/UserScript==
 
-window.URL_CLEANER_SITE = "http://localhost:9149";
-window.JOBS_CONTEXT     = {"vars": {"SOURCE_URL": window.location.href}}; // "SOURCE_REG_DOMAIN" is added in the init at the bottom.
-window.PARAMS_DIFF      = null;
-
-window.debug = {
-	new_bulk_job     : false,
-	api_request_info : false,
-	api_request_error: true,
-	api_response_info: false,
-	other_timing_info: false,
-	new_reg_domain   : false,
-	href_mutations   : false,
-	max_bulk_job_size: false
+window.config = {
+	instance_origin: "http://localhost:9149", // The origin (protocol://host:port) of your URL Cleaner Site instance. When changing, please also update the "// @match" line above.
+	params_diff    : null, // Should be set server side. But if you can't, this works.
+	send_host      : true, // If true, tells URL Cleaner Site the host of the webpage you're on so it can clean stuff the website does.
+	debug: {
+		log: {
+			new_bulk_job     : false,
+			api_request_info : false,
+			api_request_error: true,
+			api_response_info: false,
+			other_timing_info: false,
+			new_host_parts   : true,
+			href_mutations   : false,
+			max_bulk_job_size: false
+		},
+		wipe_cached_data : false
+	}
 };
 
 window.cleaned_elements = new WeakMap();
@@ -32,52 +38,6 @@ window.too_big_elements = new WeakSet();
 window.errored_elements = new WeakSet();
 window.total_elements_cleaned = 0;
 window.total_time_cleaning = 0;
-
-function elements_to_bulk_job(elements) {
-	let ret = {
-		jobs: elements.map(x => element_to_job_config(x)),
-		context: window.JOBS_CONTEXT
-	};
-	if (window.PARAMS_DIFF) {ret.params_diff = window.PARAMS_DIFF;}
-	return ret;
-}
-
-function element_to_job_config(element) {
-	if (window.JOBS_CONTEXT.vars.SOURCE_REG_DOMAIN == "x.com" && element.href.startsWith("https://t.co/") && element.innerText.startsWith("http")) {
-		// On twitter, links in tweets/bios/whatever show the entire URL when you hover over them for a moemnt.
-		// This lets us skip the HTTP request to t.co for the vast majority of links on twitter.
-		return {
-			url: element.href,
-			context: {
-				vars: {
-					redirect_shortcut: element.childNodes[0].innerText + (element.childNodes[1].textContent) + (element.childNodes[2]?.innerText ?? "")
-				}
-			}
-		};
-	} else if (window.JOBS_CONTEXT.vars.SOURCE_REG_DOMAIN == "allmylinks.com" && element.pathname=="/link/out" && element.title.startsWith("http")) {
-		return {
-			url: element.href,
-			context: {
-				vars: {
-					redirect_shortcut: element.title
-				}
-			}
-		};
-	} else if (window.JOBS_CONTEXT.vars.SOURCE_REG_DOMAIN == "furaffinity.net" && element.matches(".user-contact-user-info a") && element.innerText != encodeURIComponent(element.innerText)) {
-		/// Allows unmangling contact info links.
-		return {
-			url: decodeURIComponent(element.href),
-			context: {
-				vars: {
-					site_name: element.parentElement.querySelector("strong").innerHTML,
-					link_text: element.innerText
-				}
-			}
-		};
-	} else {
-		return element.href;
-	}
-}
 
 async function main_loop() {
 	var elements = [...document.links]
@@ -88,12 +48,12 @@ async function main_loop() {
 	setTimeout(main_loop, 100); // Is this a good interval? No idea. Is an interval even the right approach? Also no idea.
 }
 
-// The `bulk_jobs` parameter is used to make breaking big jobs into parts faster. I think.
-async function clean_elements(elements) {
+// The `bulk_job`s parameter is used to make breaking big jobs into parts faster. I think.
+async function clean_elements(elements, bulk_job) {
 
-	let bulk_job = elements_to_bulk_job(elements);
+	bulk_job ??= await elements_to_bulk_job(elements);
 
-	// If the job is too bulky, break it into parts.
+	// If the `bulk_job` is too bulky, break it into parts.
 	if (JSON.stringify(bulk_job).length > window.MAX_JSON_SIZE) {
 		if (elements.length == 1) {
 			// If, somehow, there's a URL that's over the server's size limit, this stops it from getting stuck in an infinite loop.
@@ -102,13 +62,13 @@ async function clean_elements(elements) {
 			return;
 		} else {
 			/// Cut the list in half and do them separately.
-			await clean_elements(elements.slice(0, elements.length/2), {...bulk_job, jobs: bulk_job.slice(0, bulk_job.jobs.length/2)});
+			await clean_elements(elements.slice(0, elements.length/2), {...bulk_job, tasks: bulk_job.tasks.slice(0, bulk_job.tasks.length/2)});
 			elements = elements.slice(elements.length/2);
-			bulk_job.jobs = bulk_job.jobs.slice(bulk_job.jobs.length/2);
+			bulk_job.tasks = bulk_job.tasks.slice(bulk_job.tasks.length/2);
 		}
 	}
 
-	if (bulk_job.jobs.length == 0) {return;}
+	if (bulk_job.tasks.length == 0) {return;}
 
 	let start_time = new Date();
 	let id = Math.floor(Math.random()*1e8); // Random to avoid iframes from being confusing.
@@ -118,36 +78,31 @@ async function clean_elements(elements) {
 	let data = JSON.stringify(bulk_job);
 	let done;
 	let doneawaiter = new Promise(resolve => {done = resolve;});
-	if (window.debug.new_bulk_job) {console.log("[URLC]"+id_pad, id, elements.length, "elements in", data.length, "bytes (", bulk_job, ")");}
+	if (window.config.debug.log.new_bulk_job) {console.log("[URLC]"+id_pad, id, elements.length, "elements in", data.length, "bytes (", bulk_job, ")");}
 	// This returns `undefined` in GreaseMonkey, so the weird "await for callback" pattern is required.
 	await GM.xmlHttpRequest({
-		url: `${window.URL_CLEANER_SITE}/clean`,
+		url: `${window.config.instance_origin}/clean`,
 		method: "POST",
 		data: data,
 		timeout: 10000,
-		onabort           : (e) => {if (window.debug.api_request_error) {now = new Date(); console.error("[URLC]"+id_pad, id, "abort            took", now-last_time, "ms (", e, ")"); last_time = now;} done();},
-		onerror           : (e) => {if (window.debug.api_request_error) {now = new Date(); console.error("[URLC]"+id_pad, id, "error            took", now-last_time, "ms (", e, ")"); last_time = now;} done();},
-		onloadstart       : (e) => {if (window.debug.api_request_info ) {now = new Date(); console.log  ("[URLC]"+id_pad, id, "loadstart        took", now-last_time, "ms (", e, ")"); last_time = now;}},
-		onloadprogress    : (e) => {if (window.debug.api_request_info ) {now = new Date(); console.log  ("[URLC]"+id_pad, id, "loadprogress     took", now-last_time, "ms (", e, ")"); last_time = now;}},
-		onreadystatechange: (e) => {if (window.debug.api_request_info ) {now = new Date(); console.log  ("[URLC]"+id_pad, id, "readystatechange took", now-last_time, "ms (", e, ")"); last_time = now;}},
-		ontimeout         : (e) => {if (window.debug.api_request_error) {now = new Date(); console.error("[URLC]"+id_pad, id, "timeout          took", now-last_time, "ms (", e, ")"); last_time = now;} done();},
+		onabort           : (e) => {if (window.config.debug.log.api_request_error) {now = new Date(); console.error("[URLC]"+id_pad, id, "abort            took", now-last_time, "ms (", e, ")"); last_time = now;} done();},
+		onerror           : (e) => {if (window.config.debug.log.api_request_error) {now = new Date(); console.error("[URLC]"+id_pad, id, "error            took", now-last_time, "ms (", e, ")"); last_time = now;} done();},
+		onloadstart       : (e) => {if (window.config.debug.log.api_request_info ) {now = new Date(); console.log  ("[URLC]"+id_pad, id, "loadstart        took", now-last_time, "ms (", e, ")"); last_time = now;}},
+		onloadprogress    : (e) => {if (window.config.debug.log.api_request_info ) {now = new Date(); console.log  ("[URLC]"+id_pad, id, "loadprogress     took", now-last_time, "ms (", e, ")"); last_time = now;}},
+		onreadystatechange: (e) => {if (window.config.debug.log.api_request_info ) {now = new Date(); console.log  ("[URLC]"+id_pad, id, "readystatechange took", now-last_time, "ms (", e, ")"); last_time = now;}},
+		ontimeout         : (e) => {if (window.config.debug.log.api_request_error) {now = new Date(); console.error("[URLC]"+id_pad, id, "timeout          took", now-last_time, "ms (", e, ")"); last_time = now;} done();},
 		onload: function(response) {
-			if (window.debug.api_response_info) {now = new Date(); console.log("[URLC]"+id_pad, id, "load             took", now-last_time, "ms (", response, ")"); last_time = now;}
+			if (window.config.debug.log.api_response_info) {now = new Date(); console.log("[URLC]"+id_pad, id, "load             took", now-last_time, "ms (", response, ")"); last_time = now;}
 			let result = JSON.parse(response.responseText);
 			if (result.Err == null) {
 				result.Ok.urls.forEach(function (cleaning_result, index) {
 					if (cleaning_result.Err == null) {
-						if (cleaning_result.Ok.Err == null) {
-							if (elements[index].href != cleaning_result.Ok.Ok) {
-								elements[index].setAttribute("href", cleaning_result.Ok.Ok);
-							}
-							window.cleaned_elements.set(elements[index], cleaning_result.Ok.Ok);
-						} else {
-							console.error("[URLC]"+id_pad, id, "DoJobError:", cleaning_result.Ok.Err, "Element indesx:", index, "Element:", elements[index], "Job:", bulk_job.jobs[index]);
-							window.errored_elements.add(elements[index])
+						if (elements[index].href != cleaning_result.Ok) {
+							elements[index].setAttribute("href", cleaning_result.Ok);
 						}
+						window.cleaned_elements.set(elements[index], cleaning_result.Ok);
 					} else {
-						console.error("[URLC]"+id_pad, id, "MakeJobError:", cleaning_result.Err, "Element indesx:", index, "Element:", elements[index], "Job:", bulk_job.jobs[index]);
+						console.error("[URLC]"+id_pad, id, "DoTaskError:", cleaning_result.Err, "Element indesx:", index, "Element:", elements[index], "Task:", bulk_job.tasks[index]);
 						window.errored_elements.add(elements[index])
 					}
 				});
@@ -157,24 +112,154 @@ async function clean_elements(elements) {
 			now = new Date();
 			window.total_time_cleaning += now-start_time;
 			window.total_elements_cleaned += elements.length;
-			if (window.debug.other_timing_info) {console.log("[URLC]"+id_pad, id, "writing          took", now-last_time , "ms");}
-			if (window.debug.other_timing_info) {console.log("[URLC]"+id_pad, id, "all              took", now-start_time, "ms");}
-			if (window.debug.other_timing_info) {console.log("[URLC]", "Total cleaning took", window.total_time_cleaning, "ms for", window.total_elements_cleaned, "elements");}
+			if (window.config.debug.log.other_timing_info) {console.log("[URLC]"+id_pad, id, "writing          took", now-last_time , "ms");}
+			if (window.config.debug.log.other_timing_info) {console.log("[URLC]"+id_pad, id, "all              took", now-start_time, "ms");}
+			if (window.config.debug.log.other_timing_info) {console.log("[URLC]", "Total cleaning took", window.total_time_cleaning, "ms for", window.total_elements_cleaned, "elements");}
 			done();
 		}
 	});
 	await doneawaiter;
 }
 
+async function elements_to_bulk_job(elements) {
+	let ret = {
+		tasks: elements.map(x => element_to_task_config(x)),
+		context: await get_job_context()
+	};
+	if (window.config.params_diff) {ret.params_diff = window.config.params_diff;}
+	return ret;
+}
+
+function element_to_task_config(element) {
+	if (/(^|\.)x\.com$/.test(window.location.hostname) && element.href.startsWith("https://t.co/") && element.innerText.startsWith("http")) {
+		// On twitter, links in tweets/bios/whatever show the entire URL when you hover over them for a moemnt.
+		// This lets us skip the HTTP request to t.co for the vast majority of links on twitter.
+		return {
+			url: element.href,
+			context: {
+				vars: {
+					redirect_shortcut: element.childNodes[0].innerText + (element.childNodes[1].textContent) + (element.childNodes[2]?.innerText ?? "")
+				}
+			}
+		};
+	} else if (/(^|\.)allmylinks\.com$/.test(window.location.hostname) && element.pathname=="/link/out" && element.title.startsWith("http")) {
+		return {
+			url: element.href,
+			context: {
+				vars: {
+					redirect_shortcut: element.title
+				}
+			}
+		};
+	} else if (/(^|\.)furaffinity\.net$/.test(window.location.hostname) && element.matches(".user-contact-user-info a")) {
+		/// Allows unmangling contact info links.
+
+		// Some contact info fields let invalid inputs result in invalid URLs, which URL Cleaner can't accept.
+		// If this happens, just replace it with a dummy value and hope the unmangling works.
+		// In Rust this would be 0.5 lines (https://youtube.com/watch?v=kpk2tdsPh0A).
+		let url;
+		try {
+			url = new URL(element.href).href;
+		} catch (e) {
+			url = "https://example.com/PARSE_URL_ERROR";
+		}
+		return {
+			url: url,
+			context: {
+				vars: {
+					faci_site_name: element.parentElement.querySelector("strong").innerHTML,
+					link_text: element.innerText
+				}
+			}
+		};
+	} else if (/(^|\.)bsky\.app$/.test(window.location.hostname) && element.getAttribute("href").startsWith("/profile/did:plc:") && element.innerText.startsWith("@")) {
+		return {
+			url: element.href,
+			context: {
+				vars: {
+					bsky_handle: element.innerText.replace("@", "")
+				}
+			}
+		};
+	} else if (/(^|\.)saucenao\.com$/.test(window.location.hostname) && /^https:\/\/(www\.)?(x|twitter)\.com\//.test(element.href)) {
+		return {
+			url: element.href,
+			context: {
+				vars: {
+					twitter_user_handle: element.parentElement.querySelector("[href*='/i/user/']").innerHTML.replace("@", "")
+				}
+			}
+		}
+	} else {
+		return element.href;
+	}
+}
+
+// Because the webpage's URL can change without reloading the script, this needs to be calculated per bulk job.
+// Don't worry, it's fast. I think.
+async function get_job_context() {
+	let ret = {};
+
+	if (window.config.send_host) {
+		if (ret.vars === undefined) {ret.vars = {};}
+
+		ret.vars.SOURCE_HOST = window.location.hostname;
+
+		let domain_parts = (await get_host_parts(window.location.hostname))?.Ok?.Domain;
+		if (domain_parts) {
+			for (let part of ["domain", "reg_domain"]) {
+				if (domain_parts[part]) {
+					ret.vars["SOURCE_" + part.toUpperCase()] = domain_parts[part];
+				}
+			}
+		}
+	}
+
+	return ret;
+}
+
+// Get the details of a host.
+// Used by the default config to handle websites adding their own tracking parameters to links.
+async function get_host_parts(host) {
+	let cached = await GM.getValue(`host-parts-of-${host}`);
+	if (cached != null) {return JSON.parse(cached);}
+
+	if (window.config.debug.log.new_host_parts) {console.log(`[URLC] Host parts for "${host}" not found in the cache. Querying URL Cleaner Site...`)}
+
+	let done;
+	let doneawaiter = new Promise(resolve => {done = resolve;});
+	await GM.xmlHttpRequest({
+		url: `${window.config.instance_origin}/host-parts`,
+		method: "POST",
+		data: window.location.hostname,
+		onload: function(response) {done(response.responseText);}
+	});
+	let response = await doneawaiter;
+
+	let response_object = JSON.parse(response);
+
+	await GM.setValue(`host-parts-of-${host}`, response);
+
+	return response_object;
+}
+
 (async () => {
 	console.log("[URLC] URL Cleaner Site Userscript loaded. Please note that initial cleanings take a long time because there's a lot happening.");
+
+	if (window.config.debug.wipe_cached_data) {
+		for (let name of await GM.listValues()) {
+			await GM.deleteValue(name);
+		}
+
+		console.log("[URLC] Deleted all cached data according to debug settings.");
+	}
 
 	// For reasons I don't understand, awaiting `GM.xmlHttpRequest` doesn't seem to, uh, await it.
 	// It might be me being stupid.
 	let done;
 	let doneawaiter = new Promise(resolve => {done = resolve;});
 	await GM.xmlHttpRequest({
-		url: `${window.URL_CLEANER_SITE}/get-max-json-size`,
+		url: `${window.config.instance_origin}/get-max-json-size`,
 		method: "GET",
 		onload: function(response) {
 			window.MAX_JSON_SIZE = parseInt(response.responseText);
@@ -183,50 +268,10 @@ async function clean_elements(elements) {
 	});
 	await doneawaiter;
 
-	doneawaiter = new Promise(resolve => {done = resolve;});
-	let host_details = await GM.getValue(`host-details-of-${window.location.hostname}`);
-	a: if (!host_details) {
-		// Check the very jank cache for some suffix of the current domain that is a RegDomain.
-		// For `abc.def.example.com`, it checks `abc.def.example.com`, `def.example.com`, `example.com`, and `com`.
-		let parts = window.location.hostname.replace(/\.$/g, "").split('.');
-		for (let i=0; i<parts.length; i++) {
-			let n_parent_domain = parts.slice(i).join(".");
-			if (await GM.getValue(`${n_parent_domain}-is-reg-domain`)) {
-				done(n_parent_domain);
-				break a;
-			}
-		}
-
-		// As the log implies, we only reach here when the cache doesn't have a RegDomain for the current domain, so we're asking URL Cleaner Site.
-		// I think in theory this can be done client-side using `document.cookie` but uh... no.
-		if (window.debug.new_reg_domain) {console.log(`[URLC] Couldn't find the RegDomain for ${window.location.hostname}. Asking URL Cleaner Site...`);}
-
-		await GM.xmlHttpRequest({
-			url: `${window.URL_CLEANER_SITE}/host-parts`,
-			method: "POST",
-			data: window.location.hostname,
-			onload: async function(response) {
-				await GM.setValue(`host-details-of-${window.location.hostname}`, response.responseText);
-				let reg_domain = JSON.parse(response.responseText)?.Ok?.Domain?.reg_domain;
-				if (reg_domain) {await GM.setValue(`${reg_domain}-is-reg-domain`, reg_domain != null);}
-				done(reg_domain);
-			}
-		})
-	} else {
-		// `?.` is a great operator.
-		// `null.thing` throws an error but `null?.thing` just returns `null`.
-		done(JSON.parse(host_details)?.Ok?.Domain?.reg_domain);
-	}
-	let reg_domain = await doneawaiter;
-
-	if (reg_domain) {
-		window.JOBS_CONTEXT.vars.SOURCE_REG_DOMAIN = reg_domain;
-	}
-
 	// Some websites change URLs when you, for example, mousedown on them.
 	// If you left click it, this waits for it to be cleaned.
 	new MutationObserver(function(mutations) {
-		if (window.debug.href_mutations) {console.log("[URLC]", "Href mutations observed (", mutations, ")");}
+		if (window.config.debug.log.href_mutations) {console.log("[URLC]", "Href mutations observed (", mutations, ")");}
 		mutations.forEach(function(mutation) {
 			if (window.cleaned_elements.get(mutation.target) != mutation.target.href) {
 				window.cleaned_elements.delete(mutation.target);
@@ -248,6 +293,6 @@ async function clean_elements(elements) {
 		subtree: true
 	});
 
-	if (window.debug.max_bulk_job_size) {console.log("[URLC] max bulk job size is", window.MAX_JSON_SIZE, "bytes");}
+	if (window.config.debug.log.max_bulk_job_size) {console.log("[URLC] max bulk job size is", window.MAX_JSON_SIZE, "bytes");}
 	await main_loop();
 })();
